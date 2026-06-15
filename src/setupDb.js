@@ -31,15 +31,18 @@ async function reset() {
   
   if (error) {
     console.error("Error inserting students:", error);
+    // eslint-disable-next-line no-undef -- Node.js global in setup script
     process.exit(1);
   }
   
   console.log(`✅ Seeded ${STUDENTS.length} students.`);
   console.log("✅ Database is clean and ready for the election!");
+  // eslint-disable-next-line no-undef -- Node.js global in setup script
   process.exit(0);
 }
 
 reset().catch(err => {
   console.error("Error:", err);
+  // eslint-disable-next-line no-undef -- Node.js global in setup script
   process.exit(1);
 });

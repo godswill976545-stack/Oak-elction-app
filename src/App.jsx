@@ -1,18 +1,21 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import Login from './components/Login';
 import CandidateProfiles from './components/CandidateProfiles';
 import LiveResults from './components/LiveResults';
 import AdminDashboard from './components/AdminDashboard';
-import { Landmark, Monitor, Inbox, BarChart2, ShieldCheck, ChevronRight, GraduationCap } from 'lucide-react';
+import { Landmark, Monitor, Inbox, BarChart2, ShieldCheck, ChevronRight, GraduationCap, Settings } from 'lucide-react';
+// eslint-disable-next-line no-unused-vars -- used in JSX as <motion.button>
 import { motion } from 'framer-motion';
 
+const isLightView = (view) => view === 'menu' || view === 'admin';
+
 function App() {
-  const [systemMode, setSystemMode]       = useState(null);
-  const [currentView, setCurrentView]     = useState('menu');
+  const [systemMode, setSystemMode] = useState(null);
+  const [currentView, setCurrentView] = useState('menu');
   const [loggedInStudent, setLoggedInStudent] = useState(null);
-  const [pendingMode, setPendingMode]     = useState(null);
-  const [pinInput, setPinInput]           = useState('');
-  
+  const [pendingMode, setPendingMode] = useState(null);
+  const [pinInput, setPinInput] = useState('');
+
   const handleSelectMode = (mode) => {
     if (mode === 'primary' || mode === 'admin') {
       setPendingMode(mode);
@@ -23,10 +26,10 @@ function App() {
 
   const activateMode = (mode) => {
     setSystemMode(mode);
-    if      (mode === 'primary')   setCurrentView('vote');
+    if (mode === 'primary') setCurrentView('vote');
     else if (mode === 'secondary') setCurrentView('login');
-    else if (mode === 'results')   setCurrentView('results');
-    else if (mode === 'admin')     setCurrentView('admin');
+    else if (mode === 'results') setCurrentView('results');
+    else if (mode === 'admin') setCurrentView('admin');
     setPendingMode(null);
     setPinInput('');
   };
@@ -40,170 +43,179 @@ function App() {
     }
   };
 
-  const handleLoginSuccess  = (studentId) => { setLoggedInStudent(studentId); setCurrentView('vote'); };
-  const handleVoteComplete  = () => { setLoggedInStudent(null); setCurrentView('login'); };
+  const handleLoginSuccess = (studentId) => {
+    setLoggedInStudent(studentId);
+    setCurrentView('vote');
+  };
+
+  const handleVoteComplete = () => {
+    setLoggedInStudent(null);
+    setCurrentView('login');
+  };
+
+  const goToMenu = () => {
+    setSystemMode(null);
+    setCurrentView('menu');
+    setLoggedInStudent(null);
+  };
+
+  const light = isLightView(currentView);
 
   return (
-    <div className={`app-container ${['menu', 'admin'].includes(currentView) ? 'theme-light' : 'theme-dark'}`}>
-      {/* ── Background Mesh ── */}
-      <div className="mesh-gradient" />
-
-      {/* ── Header ── */}
-      <header className={`app-header ${['menu', 'admin'].includes(currentView) ? 'header-light' : ''}`}>
+    <div className={`app-container ${light ? 'theme-light' : 'theme-dark'}`}>
+      {/* Header */}
+      <header className="app-header">
         <div className="logo-container">
-          {['menu', 'admin'].includes(currentView) ? (
-            <GraduationCap size={32} className="school-logo-icon" />
+          {light ? (
+            <GraduationCap size={28} className="school-logo-icon" style={{ color: 'var(--emerald-800)' }} />
           ) : (
-            <img src="/oak-logo.png" alt="Oak International School Logo" className="school-logo" />
+            <img src="/oak-logo.png" alt="Oak International School" className="school-logo" />
           )}
-          <h1 className="header-title">{['menu', 'admin'].includes(currentView) ? 'Oak International School' : 'OIEC VOTING PLATFORM'}</h1>
+          <h1 className="header-title">
+            {light ? 'Oak International School' : 'OIEC Voting Platform'}
+          </h1>
         </div>
 
         {loggedInStudent && currentView === 'vote' && systemMode === 'secondary' && (
-          <div style={{ fontWeight: 600, background: 'rgba(255,255,255,0.1)', padding: '8px 18px', borderRadius: '30px', border: '1px solid rgba(255,255,255,0.2)', color: '#fff' }}>
-            STUDENT ID: <span style={{ color: 'var(--gold-400)' }}>{loggedInStudent}</span>
-          </div>
+          <span className="student-badge">
+            ID: <span style={{ color: 'var(--gold-400)' }}>{loggedInStudent}</span>
+          </span>
         )}
 
-        {currentView !== 'menu' && !(currentView === 'vote' && systemMode === 'secondary') ? (
+        {currentView !== 'menu' && !(currentView === 'vote' && systemMode === 'secondary') && (
           <button
-            className={['menu', 'admin'].includes(currentView) ? "btn-select btn-white" : "btn-3d btn-sm"}
-            style={['menu', 'admin'].includes(currentView) ? { padding: '10px 20px', width: 'auto', marginBottom: 0 } : { padding: '10px 20px', fontSize: '0.9rem' }}
-            onClick={() => { setSystemMode(null); setCurrentView('menu'); setLoggedInStudent(null); }}
+            className={`btn btn-sm ${light ? 'btn-outline' : 'btn-white'}`}
+            onClick={goToMenu}
+            aria-label="Return to system menu"
           >
-            ⚙️ System Menu
+            <Settings size={16} />
+            Menu
           </button>
-        ) : ['menu', 'admin'].includes(currentView) ? (
-          <div className="header-nav">
+        )}
+
+        {light && currentView === 'menu' && (
+          <nav className="header-nav" aria-label="Main navigation">
             <a href="#">Polls</a>
             <a href="#">Results</a>
             <a href="#">Profile</a>
-          </div>
-        ) : null}
+          </nav>
+        )}
       </header>
 
-      {/* ── Main View Container with Transition ── */}
+      {/* Main */}
       <main className="main-content">
         <div key={currentView + (pendingMode || '')} className="view-transition-wrapper">
-          {/* Mode selection menu */}
+
+          {/* Mode Selection */}
           {currentView === 'menu' && !pendingMode && (
-            <div className="mode-selection-card">
-              <div className="icon-wrapper">
-                <Landmark size={40} />
+            <div className="mode-card">
+              <div className="icon-circle">
+                <Landmark size={36} />
               </div>
-              <div className="sys-config-label">SYSTEM CONFIGURATION</div>
-              <h2 className="main-title">Select System Mode</h2>
+              <div className="section-label">System Configuration</div>
+              <h2>Select Mode</h2>
 
-              <div className="flex-col" style={{ gap: '16px' }}>
-                <motion.button 
-                  className="btn-select btn-green" 
+              <div className="mode-buttons">
+                <motion.button
+                  className="mode-btn mode-btn-green"
                   onClick={() => handleSelectMode('primary')}
-                  whileHover={{ scale: 1.02, boxShadow: '0px 0px 20px rgba(6, 95, 70, 0.4)' }}
-                  whileTap={{ scale: 0.98 }}
+                  whileTap={{ scale: 0.97 }}
                 >
-                  <div className="btn-select-left">
+                  <span className="mode-btn-label">
                     <Monitor size={20} />
-                    <span>Primary Kiosk Mode</span>
-                  </div>
-                  <ChevronRight size={20} opacity={0.7} />
+                    Primary Kiosk Mode
+                  </span>
+                  <ChevronRight size={18} opacity={0.5} />
                 </motion.button>
 
-                <motion.button 
-                  className="btn-select btn-green" 
+                <motion.button
+                  className="mode-btn mode-btn-green"
                   onClick={() => handleSelectMode('secondary')}
-                  whileHover={{ scale: 1.02, boxShadow: '0px 0px 20px rgba(6, 95, 70, 0.4)' }}
-                  whileTap={{ scale: 0.98 }}
+                  whileTap={{ scale: 0.97 }}
                 >
-                  <div className="btn-select-left">
+                  <span className="mode-btn-label">
                     <Inbox size={20} />
-                    <span>Secondary Voting Portal</span>
-                  </div>
-                  <ChevronRight size={20} opacity={0.7} />
+                    Secondary Voting Portal
+                  </span>
+                  <ChevronRight size={18} opacity={0.5} />
                 </motion.button>
 
-                <motion.button 
-                  className="btn-select btn-yellow" 
+                <motion.button
+                  className="mode-btn mode-btn-gold"
                   onClick={() => handleSelectMode('results')}
-                  whileHover={{ scale: 1.02, boxShadow: '0px 0px 20px rgba(245, 158, 11, 0.4)' }}
-                  whileTap={{ scale: 0.98 }}
+                  whileTap={{ scale: 0.97 }}
                 >
-                  <div className="btn-select-left">
+                  <span className="mode-btn-label">
                     <BarChart2 size={20} />
-                    <span>View Live Results</span>
-                  </div>
-                  <ChevronRight size={20} opacity={0.7} />
+                    View Live Results
+                  </span>
+                  <ChevronRight size={18} opacity={0.5} />
                 </motion.button>
 
-                <motion.button 
-                  className="btn-select btn-white" 
+                <motion.button
+                  className="mode-btn mode-btn-white"
                   onClick={() => handleSelectMode('admin')}
-                  whileHover={{ scale: 1.02, boxShadow: '0px 0px 20px rgba(6, 95, 70, 0.15)' }}
-                  whileTap={{ scale: 0.98 }}
+                  whileTap={{ scale: 0.97 }}
                 >
-                  <div className="btn-select-left">
+                  <span className="mode-btn-label">
                     <ShieldCheck size={20} />
-                    <span>Admin Dashboard</span>
-                  </div>
-                  <ChevronRight size={20} opacity={0.7} />
+                    Admin Dashboard
+                  </span>
+                  <ChevronRight size={18} opacity={0.5} />
                 </motion.button>
               </div>
 
-              <div className="card-footer-text">
-                Authorized access only. Mode selection will lock the current<br/>
+              <p className="mode-footer">
+                Authorized access only. Mode selection will lock the
+                <br />
                 terminal until reset by an administrator.
-              </div>
+              </p>
             </div>
           )}
 
-          {/* PIN verification screen */}
+          {/* PIN Verification */}
           {currentView === 'menu' && pendingMode && (
-            <div className="mode-selection-card">
-              <div className="icon-wrapper" style={{ backgroundColor: '#fef08a', color: '#854d0e' }}>
-                <ShieldCheck size={40} />
+            <div className="mode-card">
+              <div className="icon-circle" style={{ backgroundColor: 'var(--gold-100)', color: 'var(--gold-700)' }}>
+                <ShieldCheck size={36} />
               </div>
-              <div className="sys-config-label">SECURITY CLEARANCE</div>
-              <h2 className="main-title" style={{ marginBottom: '20px' }}>Verification Required</h2>
-              <p className="subtitle" style={{ color: 'var(--text-muted)', marginBottom: '32px' }}>
-                Please enter the secure PIN to access <strong>{pendingMode === 'primary' ? 'Kiosk Mode' : 'Admin Dashboard'}</strong>.
+              <div className="section-label">Security Clearance</div>
+              <h2>Verification Required</h2>
+              <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--sp-6)', fontSize: '0.95rem' }}>
+                Enter the secure PIN to access{' '}
+                <strong>{pendingMode === 'primary' ? 'Kiosk Mode' : 'Admin Dashboard'}</strong>.
               </p>
+
               <div className="flex-col">
                 <input
                   type="password"
-                  className="input-field"
-                  placeholder="••••"
+                  className="input input-pin"
+                  placeholder="&#8226;&#8226;&#8226;&#8226;"
                   value={pinInput}
                   onChange={(e) => setPinInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
-                  style={{ 
-                    textAlign: 'center', fontSize: '2.5rem', letterSpacing: '16px', 
-                    background: '#f8fafc', border: '2px solid #e2e8f0', color: '#1e293b', borderRadius: '16px', padding: '16px', outline: 'none'
-                  }}
                   autoFocus
+                  aria-label="Admin PIN"
                 />
-                <motion.button 
-                  className="btn-select btn-green" 
-                  onClick={handlePinSubmit} 
-                  style={{ justifyContent: 'center', marginTop: '16px' }}
-                  whileHover={{ scale: 1.02, boxShadow: '0px 0px 20px rgba(6, 95, 70, 0.4)' }}
-                  whileTap={{ scale: 0.98 }}
+                <motion.button
+                  className="btn btn-primary btn-block"
+                  onClick={handlePinSubmit}
+                  whileTap={{ scale: 0.97 }}
                 >
                   Unlock System
                 </motion.button>
-                <motion.button 
-                  className="btn-select btn-white" 
-                  onClick={() => { setPendingMode(null); setPinInput(''); }} 
-                  style={{ justifyContent: 'center', border: 'none' }}
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+                <button
+                  className="btn btn-outline btn-block"
+                  onClick={() => { setPendingMode(null); setPinInput(''); }}
                 >
                   Cancel
-                </motion.button>
+                </button>
               </div>
             </div>
           )}
 
-          {currentView === 'login'   && <Login onLoginSuccess={handleLoginSuccess} />}
-          {currentView === 'vote'    && (
+          {currentView === 'login' && <Login onLoginSuccess={handleLoginSuccess} />}
+          {currentView === 'vote' && (
             <CandidateProfiles
               studentId={loggedInStudent}
               mode={systemMode}
@@ -211,15 +223,16 @@ function App() {
             />
           )}
           {currentView === 'results' && <LiveResults />}
-          {currentView === 'admin'   && <AdminDashboard />}
+          {currentView === 'admin' && <AdminDashboard />}
         </div>
       </main>
 
-      {['menu', 'admin'].includes(currentView) ? (
+      {/* Footer */}
+      {light ? (
         <footer className="app-footer">
           <div className="footer-left">
             <h3>Oak International School</h3>
-            <p>&copy; {new Date().getFullYear()} Oak International School. All rights reserved.</p>
+            <p>&copy; {new Date().getFullYear()} All rights reserved.</p>
           </div>
           <div className="footer-nav">
             <a href="#">Privacy Policy</a>
@@ -228,8 +241,8 @@ function App() {
           </div>
         </footer>
       ) : (
-        <footer style={{ textAlign: 'center', padding: '32px', color: 'rgba(255,255,255,0.5)', fontSize: '0.9rem', zIndex: 1, position: 'relative' }}>
-          &copy; {new Date().getFullYear()} Oak International School &mdash; High-Security Voting Infrastructure.
+        <footer style={{ textAlign: 'center', padding: 'var(--sp-8)', color: 'var(--text-on-dark-muted)', fontSize: '0.85rem' }}>
+          &copy; {new Date().getFullYear()} Oak International School &mdash; Secure Voting Infrastructure.
         </footer>
       )}
     </div>
