@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import Login from './components/Login';
 import CandidateProfiles from './components/CandidateProfiles';
 import LiveResults from './components/LiveResults';
 import AdminDashboard from './components/AdminDashboard';
-import { Landmark, Monitor, Inbox, BarChart2, ShieldCheck, ChevronRight, GraduationCap } from 'lucide-react';
+import ConnectionBanner from './components/ConnectionBanner';
+import { Landmark, Monitor, Inbox, BarChart2, ShieldCheck, ChevronRight, GraduationCap, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+
+const ADMIN_PIN = import.meta.env.VITE_ADMIN_PIN || '5793';
 
 function App() {
   const [systemMode, setSystemMode]       = useState(null);
@@ -12,7 +15,16 @@ function App() {
   const [loggedInStudent, setLoggedInStudent] = useState(null);
   const [pendingMode, setPendingMode]     = useState(null);
   const [pinInput, setPinInput]           = useState('');
-  
+  const [envReady, setEnvReady]           = useState(true);
+
+  useEffect(() => {
+    const url = import.meta.env.VITE_SUPABASE_URL;
+    const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    if (!url || !key) {
+      setEnvReady(false);
+    }
+  }, []);
+
   const handleSelectMode = (mode) => {
     if (mode === 'primary' || mode === 'admin') {
       setPendingMode(mode);
@@ -32,7 +44,7 @@ function App() {
   };
 
   const handlePinSubmit = () => {
-    if (pinInput === '5793') {
+    if (pinInput === ADMIN_PIN) {
       activateMode(pendingMode);
     } else {
       alert('Incorrect Admin PIN');
@@ -43,8 +55,30 @@ function App() {
   const handleLoginSuccess  = (studentId) => { setLoggedInStudent(studentId); setCurrentView('vote'); };
   const handleVoteComplete  = () => { setLoggedInStudent(null); setCurrentView('login'); };
 
+  if (!envReady) {
+    return (
+      <div className="app-container theme-light" style={{ justifyContent: 'center', alignItems: 'center', padding: '24px' }}>
+        <div className="mode-selection-card" style={{ maxWidth: '480px' }}>
+          <div className="icon-wrapper" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>
+            <AlertCircle size={40} />
+          </div>
+          <h2 className="main-title" style={{ fontSize: '1.6rem' }}>Configuration Missing</h2>
+          <p className="subtitle" style={{ color: '#7f1d1d', fontSize: '1rem' }}>
+            Supabase environment variables are not set. Create a <code>.env</code> file with:
+          </p>
+          <pre style={{ background: '#f8fafc', padding: '16px', borderRadius: '12px', textAlign: 'left', fontSize: '0.85rem', overflowX: 'auto', border: '1px solid #e2e8f0' }}>
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+VITE_ADMIN_PIN=5793
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`app-container ${['menu', 'admin'].includes(currentView) ? 'theme-light' : 'theme-dark'}`}>
+      <ConnectionBanner />
       {/* ── Background Mesh ── */}
       <div className="mesh-gradient" />
 

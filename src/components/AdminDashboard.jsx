@@ -77,7 +77,7 @@ const AdminDashboard = () => {
           <div className="sys-config-label">ADMINISTRATION</div>
           <h2 className="main-title" style={{ marginBottom: '12px' }}>Candidate Registry</h2>
           <p className="subtitle" style={{ color: 'var(--text-muted)' }}>
-            Securely register candidates. Biometric images are base64-encrypted and stored locally in the Firestore cloud.
+            Securely register candidates. Photos are uploaded to Supabase Storage and registered in the database.
           </p>
         </header>
 

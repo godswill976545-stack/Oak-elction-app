@@ -10,6 +10,7 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
   const [loading,           setLoading]           = useState(false);
   const [votedCategories,   setVotedCategories]   = useState(new Set());
   const [showThankYou,      setShowThankYou]      = useState(false);
+  const [voteError,         setVoteError]         = useState('');
 
   useEffect(() => {
     const unsubscribe = subscribeToCandidates((data) => setCandidates(data));
@@ -37,6 +38,7 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
   const handleVote = async () => {
     if (!selectedCandidate) return;
     setLoading(true);
+    setVoteError('');
     try {
       if (mode === 'primary') {
         await submitPrimaryVote(selectedCandidate.id);
@@ -61,8 +63,7 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
         }
       }
     } catch (err) {
-      alert(err.message);
-      setSelectedCandidate(null);
+      setVoteError(err.message || 'Vote failed. Please retry.');
     } finally {
       setLoading(false);
     }
@@ -250,11 +251,17 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
             <p className="subtitle" style={{ fontSize: '1rem' }}>
               You are selecting <strong style={{ color: 'var(--gold-400)' }}>{selectedCandidate.name}</strong> for the role of <strong>{selectedCandidate.category}</strong>.
             </p>
-            <div style={{ background: 'rgba(251, 113, 133, 0.1)', padding: '16px', borderRadius: '16px', marginBottom: '24px', border: '1px solid rgba(251, 113, 133, 0.2)' }}>
+            <div style={{ background: 'rgba(251, 113, 133, 0.1)', padding: '16px', borderRadius: '16px', marginBottom: '16px', border: '1px solid rgba(251, 113, 133, 0.2)' }}>
               <p style={{ color: '#fb7185', fontSize: '0.85rem', fontWeight: 600 }}>
                 ⚠️ Warning: You cannot change this vote after confirmation.
               </p>
             </div>
+
+            {voteError && (
+              <div style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', padding: '12px', borderRadius: '12px', marginBottom: '16px', fontWeight: 600, fontSize: '0.9rem', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                {voteError}
+              </div>
+            )}
 
             <div className="flex-col">
               <motion.button
@@ -272,7 +279,7 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
               <motion.button
                 className="btn-3d"
                 style={{ background: 'transparent', border: 'none' }}
-                onClick={() => setSelectedCandidate(null)}
+                onClick={() => { setSelectedCandidate(null); setVoteError(''); }}
                 disabled={loading}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
