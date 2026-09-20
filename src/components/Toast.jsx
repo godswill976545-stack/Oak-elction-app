@@ -14,7 +14,7 @@ const Toast = ({ message, type = 'success', onDismiss, duration = 3000 }) => {
 
   return (
     <div className="toast-container">
-      <div className={`toast toast-${type}`}>
+      <div className={`toast toast-${type}`} role="status">
         <Icon size={18} />
         <span>{message}</span>
       </div>

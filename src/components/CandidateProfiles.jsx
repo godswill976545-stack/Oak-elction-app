@@ -1,18 +1,28 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { subscribeToCandidates, submitPrimaryVote, submitSecondaryVote } from '../supabaseClient';
-import { Search, CheckCircle, AlertCircle } from 'lucide-react';
-// eslint-disable-next-line no-unused-vars -- used in JSX as <motion.button>, <AnimatePresence>
-import { motion, AnimatePresence } from 'framer-motion';
+import { subscribeToCandidates, submitPrimaryVote, submitSecondaryVote, submitStaffVote } from '../supabaseClient';
+import { Search, CheckCircle, ArrowLeft, ShieldAlert, X } from 'lucide-react';
 import StepIndicator from './StepIndicator';
 import ConfirmDialog from './ConfirmDialog';
+import BallotGrid from './BallotGrid';
 
-const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
+// Portal-agnostic ballot shell. portal: 'primary' | 'secondary' | 'staff'.
+// voterId is the student ID or staff code; onVoteComplete fires when every
+// position is voted; onExit (optional) returns to the previous screen.
+const CandidateProfiles = ({
+  voterId,
+  portal = 'secondary',
+  voterLabel,
+  initialVotedCategories = [],
+  onVoteComplete,
+  onExit,
+}) => {
   const [candidates, setCandidates] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [votedCategories, setVotedCategories] = useState(new Set());
+  const [votedCategories, setVotedCategories] = useState(() => new Set(initialVotedCategories));
   const [showThankYou, setShowThankYou] = useState(false);
+  const [voteError, setVoteError] = useState('');
 
   useEffect(() => {
     const unsubscribe = subscribeToCandidates((data) => setCandidates(data));
@@ -36,7 +46,9 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
     const q = searchQuery.toLowerCase();
     Object.entries(grouped).forEach(([cat, cands]) => {
       const filtered = cands.filter(
-        (c) => c.name.toLowerCase().includes(q) || (c.manifesto && c.manifesto.toLowerCase().includes(q))
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.manifesto && c.manifesto.toLowerCase().includes(q))
       );
       if (filtered.length > 0) result[cat] = filtered;
     });
@@ -51,10 +63,12 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
     if (!selectedCandidate) return;
     setLoading(true);
     try {
-      if (mode === 'primary') {
-        await submitPrimaryVote(selectedCandidate.id);
+      if (portal === 'primary') {
+        await submitPrimaryVote(voterId, selectedCandidate.id);
+      } else if (portal === 'staff') {
+        await submitStaffVote(voterId, selectedCandidate.id);
       } else {
-        await submitSecondaryVote(studentId, selectedCandidate.id);
+        await submitSecondaryVote(voterId, selectedCandidate.id);
       }
 
       const newVoted = new Set([...votedCategories, selectedCandidate.category]);
@@ -63,18 +77,10 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
 
       if (categories.every((cat) => newVoted.has(cat))) {
         setShowThankYou(true);
-        if (mode === 'primary') {
-          setTimeout(() => {
-            setShowThankYou(false);
-            setVotedCategories(new Set());
-            setSearchQuery('');
-          }, 4000);
-        } else {
-          setTimeout(() => onVoteComplete(), 3000);
-        }
+        setTimeout(() => onVoteComplete(), 3000);
       }
     } catch (err) {
-      alert(err.message);
+      setVoteError(err.message);
       setSelectedCandidate(null);
     } finally {
       setLoading(false);
@@ -93,13 +99,10 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
           Thank you for exercising your right to vote. Your choices have been securely recorded.
         </p>
         <div className="welcome-progress" style={{ marginTop: 'var(--sp-8)' }}>
-          <div
-            className="welcome-progress-fill"
-            style={{ animationDuration: mode === 'primary' ? '3.8s' : '2.8s' }}
-          />
+          <div className="welcome-progress-fill" style={{ animationDuration: '2.8s' }} />
         </div>
         <p style={{ marginTop: 'var(--sp-5)', color: 'var(--text-on-dark-muted)', fontSize: '0.8rem' }}>
-          {mode === 'primary' ? 'Clearing session for next voter...' : 'Finalizing portal session...'}
+          Finalizing session...
         </p>
       </div>
     );
@@ -111,7 +114,7 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
       <div className="vote-progress" style={{ marginBottom: 'var(--sp-8)' }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 'var(--sp-2)', color: 'var(--gold-400)' }}>
-            Electoral Progress
+            Electoral Progress{voterLabel ? ` — ${voterLabel}` : ''}
           </div>
           <div className="vote-progress-bar">
             <div
@@ -130,11 +133,13 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
         <StepIndicator total={categories.length} current={currentCategoryIndex >= 0 ? currentCategoryIndex : categories.length} />
       )}
 
-      {/* Kiosk Banner */}
-      {mode === 'primary' && (
-        <div className="kiosk-banner" style={{ marginBottom: 'var(--sp-6)' }}>
-          <AlertCircle size={18} />
-          <span>Kiosk Mode Active: No Student ID Required.</span>
+      {/* Exit */}
+      {onExit && (
+        <div style={{ marginBottom: 'var(--sp-6)' }}>
+          <button className="btn btn-sm btn-outline" onClick={onExit}>
+            <ArrowLeft size={16} />
+            Switch voter
+          </button>
         </div>
       )}
 
@@ -149,7 +154,18 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             aria-label="Search candidates"
+            style={{ paddingRight: 48 }}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              className="search-clear"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+            >
+              <X size={18} />
+            </button>
+          )}
         </div>
       )}
 
@@ -164,35 +180,39 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
             </span>
           </div>
 
-          <div className="candidate-grid">
-            <AnimatePresence mode="popLayout">
-              {currentCandidates.map((candidate, index) => (
-                <motion.div
-                  key={candidate.id}
-                  className="candidate-card"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  transition={{ delay: index * 0.05 }}
-                  layout
-                >
-                  <img src={candidate.photo_url} alt={candidate.name} />
-                  <div className="candidate-card-body">
-                    <div className="candidate-card-role">{candidate.category}</div>
-                    <div className="candidate-card-name">{candidate.name}</div>
-                    <p className="candidate-card-manifesto">"{candidate.manifesto}"</p>
-                    <motion.button
-                      className="btn btn-primary btn-block"
-                      onClick={() => setSelectedCandidate(candidate)}
-                      whileTap={{ scale: 0.97 }}
-                    >
-                      Vote for {candidate.name.split(' ')[0]}
-                    </motion.button>
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
+          <BallotGrid
+            candidates={currentCandidates}
+            selectedId={selectedCandidate?.id || null}
+            onSelect={(c) => {
+              setVoteError('');
+              if (portal === 'secondary') {
+                // Auto-submit and advance to next category for secondary portal
+                setLoading(true);
+                submitSecondaryVote(voterId, c.id)
+                  .then(() => {
+                    const newVoted = new Set([...votedCategories, c.category]);
+                    setVotedCategories(newVoted);
+                    // If all categories voted, show thank you and finish
+                    if (categories.every((cat) => newVoted.has(cat))) {
+                      setShowThankYou(true);
+                      setTimeout(() => onVoteComplete(), 3000);
+                    }
+                  })
+                  .catch((err) => setVoteError(err.message))
+                  .finally(() => setLoading(false));
+              } else {
+                setSelectedCandidate(c);
+              }
+            }}
+            disabled={loading}
+          />
+
+          {voteError && (
+            <div className="error-msg" role="alert" style={{ marginTop: 'var(--sp-4)' }}>
+              <ShieldAlert size={16} />
+              <span>{voteError}</span>
+            </div>
+          )}
 
           {currentCandidates.length === 0 && (
             <div className="empty-state">
@@ -222,7 +242,7 @@ const CandidateProfiles = ({ studentId, mode, onVoteComplete }) => {
                 gap: 'var(--sp-1)',
                 padding: 'var(--sp-1) var(--sp-3)',
                 borderRadius: 'var(--radius-full)',
-                fontSize: '0.75rem',
+                fontSize: '0.8125rem',
                 fontWeight: 700,
                 background: votedCategories.has(cat) ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.06)',
                 color: votedCategories.has(cat) ? 'var(--emerald-400)' : 'var(--text-on-dark-muted)',

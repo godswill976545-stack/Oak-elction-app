@@ -1,30 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { verifyStudent } from '../supabaseClient';
-import { ShieldAlert, LogIn, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { verifyStaff } from '../supabaseClient';
+import { ShieldAlert, LogIn, CheckCircle2, Briefcase } from 'lucide-react';
 // eslint-disable-next-line no-unused-vars -- used in JSX as <motion.button>, <motion.div>, <AnimatePresence>
 import { motion, AnimatePresence } from 'framer-motion';
 
-const Login = ({ onLoginSuccess }) => {
-  const [studentId, setStudentId] = useState('');
+// Staff portal login: staff codes only (student IDs are rejected because
+// they don't exist in the staff table).
+const StaffLogin = ({ onLoginSuccess }) => {
+  const [staffCode, setStaffCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [welcomeData, setWelcomeData] = useState(null);
 
   useEffect(() => {
     if (!welcomeData) return;
-    const timer = setTimeout(() => onLoginSuccess(welcomeData.studentId, welcomeData.votedCategories || []), 2500);
+    const timer = setTimeout(
+      () => onLoginSuccess(welcomeData.staffCode, welcomeData.votedCategories || []),
+      2500
+    );
     return () => clearTimeout(timer);
   }, [welcomeData, onLoginSuccess]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!studentId.trim()) return;
+    if (!staffCode.trim()) return;
     setLoading(true);
     setError('');
     try {
-      const result = await verifyStudent(studentId.trim());
+      const result = await verifyStaff(staffCode.trim());
       if (result.verified) {
-        setWelcomeData({ name: result.name, studentId: result.studentId, votedCategories: result.votedCategories || [] });
+        setWelcomeData({
+          name: result.name,
+          staffCode: result.staffCode,
+          votedCategories: result.votedCategories || [],
+        });
       }
     } catch (err) {
       setError(err.message);
@@ -40,13 +49,13 @@ const Login = ({ onLoginSuccess }) => {
           <CheckCircle2 size={48} />
         </div>
         <p style={{ color: 'var(--text-on-dark-muted)', marginBottom: 'var(--sp-2)', fontSize: '0.95rem' }}>
-          Identity Verified
+          Staff Verified
         </p>
         <h2 style={{ fontSize: '2.25rem', marginBottom: 'var(--sp-4)' }}>
           Welcome, {welcomeData.name.split(' ')[0]}!
         </h2>
         <p style={{ color: 'var(--text-on-dark-muted)', fontSize: '1rem' }}>
-          Preparing your secure digital ballot…
+          Preparing your secure staff ballot…
         </p>
         <div className="welcome-progress">
           <div className="welcome-progress-fill" />
@@ -59,12 +68,12 @@ const Login = ({ onLoginSuccess }) => {
     <div className="login-card">
       <div className="login-card-header">
         <div className="login-card-icon">
-          <ShieldCheck size={32} />
+          <Briefcase size={32} />
         </div>
         <div>
-          <h2>Voter Access</h2>
+          <h2>Staff Access</h2>
           <p className="subtitle">
-            Enter your official Student ID to access the voting chamber.
+            Enter your official staff code to access the staff ballot.
           </p>
         </div>
       </div>
@@ -74,11 +83,11 @@ const Login = ({ onLoginSuccess }) => {
           <input
             type="text"
             className="input input-dark"
-            placeholder="OIS/ID/XXXXX"
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
+            placeholder="STF/XXXXX"
+            value={staffCode}
+            onChange={(e) => setStaffCode(e.target.value)}
             disabled={loading}
-            aria-label="Student ID"
+            aria-label="Staff code"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="characters"
@@ -112,7 +121,7 @@ const Login = ({ onLoginSuccess }) => {
           whileTap={!loading ? { scale: 0.97 } : {}}
         >
           {loading ? (
-            <><span className="btn-spinner" /> Scanning ID…</>
+            <><span className="btn-spinner" /> Verifying…</>
           ) : (
             <><LogIn size={20} /> Access Ballot</>
           )}
@@ -129,4 +138,4 @@ const Login = ({ onLoginSuccess }) => {
   );
 };
 
-export default Login;
+export default StaffLogin;
