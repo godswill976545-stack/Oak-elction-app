@@ -1,4 +1,5 @@
 import { getSql } from './_db.js';
+import { isAdminPinValid } from './_admin.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
@@ -20,9 +21,12 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { name, logo_url } = req.body || {};
-      if (!name?.trim()) return send(res, 400, { error: 'Party name is required.' });
+      const { name, logo_url, adminPin } = req.body || {};
       const sql = getSql();
+      if (!(await isAdminPinValid(adminPin, sql))) {
+        return send(res, 403, { error: 'Admin authorization required.' });
+      }
+      if (!name?.trim()) return send(res, 400, { error: 'Party name is required.' });
       const updated = await sql.query(
         'UPDATE parties SET logo_url = $2 WHERE name = $1 RETURNING name, short_code, logo_url',
         [name.trim(), logo_url || null]

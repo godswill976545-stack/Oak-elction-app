@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS public.candidacy_applications (
     signature_file TEXT,
     signature_filename TEXT DEFAULT '',
     signature_mimetype TEXT DEFAULT 'application/octet-stream',
+    party TEXT,
     status TEXT DEFAULT 'pending' NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now() NOT NULL
 );
@@ -149,3 +150,13 @@ CREATE INDEX IF NOT EXISTS idx_candidacy_status ON public.candidacy_applications
 ALTER TABLE public.candidacy_applications ADD COLUMN IF NOT EXISTS signature_file TEXT;
 ALTER TABLE public.candidacy_applications ADD COLUMN IF NOT EXISTS signature_filename TEXT DEFAULT '';
 ALTER TABLE public.candidacy_applications ADD COLUMN IF NOT EXISTS signature_mimetype TEXT DEFAULT 'application/octet-stream';
+ALTER TABLE public.candidacy_applications ADD COLUMN IF NOT EXISTS party TEXT;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'candidacy_party_fkey') THEN
+        ALTER TABLE public.candidacy_applications
+            ADD CONSTRAINT candidacy_party_fkey FOREIGN KEY (party) REFERENCES public.parties (name);
+    END IF;
+END
+$$;

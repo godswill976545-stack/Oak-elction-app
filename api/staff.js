@@ -1,4 +1,5 @@
 import { getSql } from './_db.js';
+import { isAdminPinValid } from './_admin.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
@@ -20,11 +21,14 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { code, name } = req.body || {};
+      const { code, name, adminPin } = req.body || {};
+      const sql = getSql();
+      if (!(await isAdminPinValid(adminPin, sql))) {
+        return send(res, 403, { error: 'Admin authorization required.' });
+      }
       if (!code?.trim() || !name?.trim()) {
         return send(res, 400, { error: 'Staff code and name are required.' });
       }
-      const sql = getSql();
       const done = await sql.query(
         'INSERT INTO staff (code, name, has_voted) VALUES ($1, $2, false) ON CONFLICT (code) DO NOTHING RETURNING code, name',
         [code.trim(), name.trim()]

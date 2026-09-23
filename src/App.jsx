@@ -28,6 +28,9 @@ function App() {
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [pinLoading, setPinLoading] = useState(false);
+  // Retained after verification: proves admin rights to the API on every
+  // privileged mutation (register candidate, approve, staff, logos).
+  const [adminPin, setAdminPin] = useState(null);
 
   const handleSelectMode = (mode) => {
     if (mode === 'primary' || mode === 'admin') {
@@ -57,6 +60,7 @@ function App() {
     try {
       const ok = await verifyAdminPin(pinInput);
       if (ok) {
+        if (pendingMode === 'admin' || pendingMode === 'primary') setAdminPin(pinInput);
         activateMode(pendingMode);
       } else {
         setPinError('Incorrect Admin PIN');
@@ -114,6 +118,7 @@ function App() {
     setInitialVotes([]);
     setLoggedInStaff(null);
     setInitialStaffVotes([]);
+    setAdminPin(null);
   };
 
   const light = isLightView(currentView);
@@ -356,7 +361,7 @@ function App() {
             />
           )}
           {currentView === 'results' && <LiveResults />}
-          {currentView === 'admin' && <AdminDashboard />}
+          {currentView === 'admin' && <AdminDashboard adminPin={adminPin} />}
           {currentView === 'candidate-form' && <CandidateForm />}
         </div>
       </main>

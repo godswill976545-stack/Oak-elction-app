@@ -5,7 +5,7 @@ import { ShieldCheck, PlusCircle, UploadCloud, CheckCircle, XCircle, Flag, Users
 import { motion } from 'framer-motion';
 import PartyBadge from './PartyBadge';
 
-const AdminDashboard = () => {
+const AdminDashboard = ({ adminPin }) => {
   const [formData, setFormData] = useState({ name: '', category: 'Head Boy', manifesto: '', party: '' });
   const [photoPreview, setPhotoPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -60,7 +60,7 @@ const AdminDashboard = () => {
     try {
       // Neon has no storage bucket: the portrait is sent as a data-URL and
       // stored directly in the candidate's photo_url column.
-      await addCandidate({ ...formData, party: formData.party || null, photo_url: photoPreview });
+      await addCandidate({ ...formData, party: formData.party || null, photo_url: photoPreview }, adminPin);
 
       setSuccessMsg(`${formData.name} has been registered as a candidate.`);
       resetForm();
@@ -86,7 +86,7 @@ const AdminDashboard = () => {
         reader.onerror = reject;
         reader.readAsDataURL(file);
       });
-      const updated = await setPartyLogo(partyName, dataUrl);
+      const updated = await setPartyLogo(partyName, dataUrl, adminPin);
       setParties((prev) => prev.map((p) => (p.name === updated.name ? updated : p)));
       setSuccessMsg(`${partyName} logo updated.`);
     } catch (err) {
@@ -105,7 +105,7 @@ const AdminDashboard = () => {
     setStaffLoading(true);
     setErrorMsg('');
     try {
-      const added = await addStaff(staffForm.code.trim(), staffForm.name.trim());
+      const added = await addStaff(staffForm.code.trim(), staffForm.name.trim(), adminPin);
       setStaffList((prev) => [...prev, { ...added, has_voted: false }].sort((a, b) => a.name.localeCompare(b.name)));
       setStaffForm({ code: '', name: '' });
       setSuccessMsg(`${added.name} registered for staff voting.`);
@@ -139,7 +139,7 @@ const AdminDashboard = () => {
     setAppLoading(true);
     setErrorMsg('');
     try {
-      const updated = await setCandidacyStatus(id, status);
+      const updated = await setCandidacyStatus(id, status, adminPin);
       setApplications((prev) => prev.map((a) => (a.id === id ? { ...a, status: updated.status } : a)));
       setAppDetail((prev) => (prev && prev.id === id ? { ...prev, status: updated.status } : prev));
       setSuccessMsg(
@@ -378,7 +378,7 @@ const AdminDashboard = () => {
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ display: 'block', fontWeight: 800 }}>{a.surname} {a.given_names}</span>
                   <span style={{ display: 'block', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                    {a.class} · {a.intended_post} · {new Date(a.created_at).toLocaleDateString()}
+                    {a.class} · {a.intended_post}{a.party ? ` · ${a.party}` : ''} · {new Date(a.created_at).toLocaleDateString()}
                   </span>
                 </span>
                 <span className={`candidacy-status is-${a.status}`}>{a.status}</span>
@@ -391,6 +391,8 @@ const AdminDashboard = () => {
                       <div>
                         <dt>Gender / Class</dt>
                         <dd>{appDetail.gender} · {appDetail.class}</dd>
+                        <dt>Electoral party</dt>
+                        <dd>{appDetail.party || 'Independent'}</dd>
                         <dt>Held a school post?</dt>
                         <dd>{appDetail.held_post ? `Yes — ${appDetail.held_position}` : 'No'}</dd>
                         <dt>Ran before and lost?</dt>

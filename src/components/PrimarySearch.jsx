@@ -12,6 +12,9 @@ const PrimarySearch = () => {
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState(null);
+  // Bumped when a ballot finishes so the list re-fetches fresh
+  // voted/complete flags instead of showing the just-finished voter as votable.
+  const [refreshTick, setRefreshTick] = useState(0);
   const timer = useRef(null);
 
   useEffect(() => {
@@ -34,11 +37,12 @@ const PrimarySearch = () => {
       }
     }, 350);
     return () => timer.current && clearTimeout(timer.current);
-  }, [query]);
+  }, [query, refreshTick]);
 
   const handleDone = () => {
     // Ballot finished: drop back to the name search for the next voter.
     setSelected(null);
+    setRefreshTick((t) => t + 1);
   };
 
   if (selected) {

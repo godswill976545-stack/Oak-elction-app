@@ -1,4 +1,5 @@
 import { getSql } from './_db.js';
+import { isAdminPinValid } from './_admin.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
@@ -24,11 +25,14 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { name, category, manifesto, photo_url, party } = req.body || {};
+      const { name, category, manifesto, photo_url, party, adminPin } = req.body || {};
+      const sql = getSql();
+      if (!(await isAdminPinValid(adminPin, sql))) {
+        return send(res, 403, { error: 'Admin authorization required.' });
+      }
       if (!name?.trim() || !category?.trim() || !manifesto?.trim() || !photo_url) {
         return send(res, 400, { error: 'All fields are required: Name, Manifesto, and Photo.' });
       }
-      const sql = getSql();
       let partyName = null;
       if (party) {
         const found = await sql.query('SELECT name FROM parties WHERE name = $1', [party]);

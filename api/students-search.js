@@ -18,9 +18,10 @@ export default async function handler(req, res) {
       return;
     }
     const sql = getSql();
+    const escaped = q.replace(/[\\%_]/g, (m) => `\\${m}`);
     const students = await sql.query(
-      'SELECT id, name, has_voted FROM primary_students WHERE name ILIKE $1 ORDER BY name LIMIT 20',
-      [`%${q}%`]
+      "SELECT id, name, has_voted FROM primary_students WHERE name ILIKE $1 ESCAPE '\\' ORDER BY name LIMIT 20",
+      [`%${escaped}%`]
     );
     const catRows = await sql.query('SELECT DISTINCT category FROM candidates');
     const allCategories = catRows.map((r) => r.category);

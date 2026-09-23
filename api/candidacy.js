@@ -1,4 +1,5 @@
 import { getSql } from './_db.js';
+import { isAdminPinValid } from './_admin.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
@@ -46,7 +47,7 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const rows = await sql.query(
-        `SELECT id, surname, given_names, gender, class, intended_post, status, created_at
+        `SELECT id, surname, given_names, gender, class, intended_post, party, status, created_at
          FROM candidacy_applications ORDER BY created_at DESC`
       );
       return send(res, 200, rows);
@@ -64,6 +65,9 @@ export default async function handler(req, res) {
       if (b.action === 'status') {
         if (!['pending', 'approved', 'rejected'].includes(b.status)) {
           return send(res, 400, { error: 'Invalid status.' });
+        }
+        if (!(await isAdminPinValid(b.adminPin, sql))) {
+          return send(res, 403, { error: 'Admin authorization required.' });
         }
         const apps = await sql.query('SELECT * FROM candidacy_applications WHERE id = $1', [b.id]);
         if (apps.length === 0) return send(res, 404, { error: 'Application not found.' });
@@ -83,17 +87,37 @@ export default async function handler(req, res) {
           const manifesto = [app.motivation, app.achievements ? `Achievements: ${app.achievements}` : null]
             .filter(Boolean).join('\n\n');
           const existing = await sql.query(
-            'SELECT id FROM candidates WHERE name = $1 AND category = $2 LIMIT 1',
+            'SELECT id, party FROM candidates WHERE name = $1 AND category = $2 LIMIT 1',
             [fullName, app.intended_post]
           );
           if (existing.length > 0) {
             candidateId = existing[0].id;
+            // Backfill the party if the application names one and the
+            // ballot row doesn't have it yet (e.g. approved before parties existed).
+            if (app.party && existing[0].party !== app.party) {
+              await sql.query('UPDATE candidates SET party = $2 WHERE id = $1', [candidateId, app.party]);
+            }
           } else {
             candidateId = `${slug(fullName)}-${String(app.id).toLowerCase().replace(/[^a-z0-9]+/g, '').slice(-6)}${Date.now().toString(36)}`;
             await sql.query(
-              'INSERT INTO candidates (id, name, category, manifesto, photo_url, party, primary_vote_count, secondary_vote_count, staff_vote_count) VALUES ($1, $2, $3, $4, $5, NULL, 0, 0, 0)',
-              [candidateId, fullName, app.intended_post, manifesto || '—', app.photo_url]
+              'INSERT INTO candidates (id, name, category, manifesto, photo_url, party, primary_vote_count, secondary_vote_count, staff_vote_count) VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0)',
+              [candidateId, fullName, app.intended_post, manifesto || '—', app.photo_url, app.party || null]
             );
+          }
+        }
+        // Rejecting pulls the auto-published ballot row back off, but only
+        // when it has zero votes everywhere — never delete votes cast.
+        if (b.status === 'rejected') {
+          const fullName = `${(app.given_names || '').trim()} ${(app.surname || '').trim()}`.trim();
+          const rows = await sql.query(
+            `SELECT id FROM candidates WHERE name = $1 AND category = $2
+             AND COALESCE(primary_vote_count,0) = 0
+             AND COALESCE(secondary_vote_count,0) = 0
+             AND COALESCE(staff_vote_count,0) = 0 LIMIT 1`,
+            [fullName, app.intended_post]
+          );
+          if (rows.length > 0) {
+            await sql.query('DELETE FROM candidates WHERE id = $1', [rows[0].id]);
           }
         }
         return send(res, 200, { ...updated[0], candidateId });
@@ -122,8 +146,16 @@ export default async function handler(req, res) {
       if (!b.cv_filename || !b.results_filename) {
         return send(res, 400, { error: 'CV and results files are required.' });
       }
+      // Electoral party is optional (Independent when omitted), but when
+      // given it must be a real party so approve() can publish it to the ballot.
+      let partyName = null;
+      if (typeof b.party === 'string' && b.party.trim()) {
+        const found = await sql.query('SELECT name FROM parties WHERE name = $1', [b.party.trim()]);
+        if (found.length === 0) return send(res, 400, { error: 'Unknown political party.' });
+        partyName = found[0].name;
+      }
 
-      const id = `OIEC-2025-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1296).toString(36).toUpperCase().padStart(2, '0')}`;
+      const id = `OIEC-26-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1296).toString(36).toUpperCase().padStart(2, '0')}`;
       await sql.query(
         `INSERT INTO candidacy_applications
          (id, surname, given_names, gender, class, intended_post,
@@ -131,8 +163,8 @@ export default async function handler(req, res) {
           disciplinary, disciplinary_details, motivation, achievements, attest_name,
           photo_url, cv_file, cv_filename, cv_mimetype,
           results_file, results_filename, results_mimetype,
-          signature_file, signature_filename, signature_mimetype, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,'pending')`,
+          signature_file, signature_filename, signature_mimetype, party, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'pending')`,
         [
           id,
           b.surname.trim(), b.given_names.trim(), b.gender, b.class.trim(), b.intended_post,
@@ -144,6 +176,7 @@ export default async function handler(req, res) {
           b.cv_file, b.cv_filename, b.cv_mimetype || 'application/octet-stream',
           b.results_file, b.results_filename, b.results_mimetype || 'application/octet-stream',
           b.signature_file, b.signature_filename || 'signature', b.signature_mimetype || 'application/octet-stream',
+          partyName,
         ]
       );
       return send(res, 201, { id });

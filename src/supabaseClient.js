@@ -65,10 +65,10 @@ export const fetchParties = async () => {
   return request('/api/parties');
 };
 
-export const setPartyLogo = async (name, logo_url) => {
+export const setPartyLogo = async (name, logo_url, adminPin) => {
   return request('/api/parties', {
     method: 'POST',
-    body: JSON.stringify({ name, logo_url }),
+    body: JSON.stringify({ name, logo_url, adminPin }),
   });
 };
 
@@ -77,18 +77,18 @@ export const fetchStaff = async () => {
   return request('/api/staff');
 };
 
-export const addStaff = async (code, name) => {
+export const addStaff = async (code, name, adminPin) => {
   return request('/api/staff', {
     method: 'POST',
-    body: JSON.stringify({ code, name }),
+    body: JSON.stringify({ code, name, adminPin }),
   });
 };
 
 // Add New Candidate (photo_url is a data-URL or https URL — Neon has no storage bucket)
-export const addCandidate = async (candidateData) => {
+export const addCandidate = async (candidateData, adminPin) => {
   return request('/api/candidates', {
     method: 'POST',
-    body: JSON.stringify(candidateData),
+    body: JSON.stringify({ ...candidateData, adminPin }),
   });
 };
 
@@ -117,10 +117,10 @@ export const fetchCandidacy = async (id) => {
   return request(`/api/candidacy?id=${encodeURIComponent(id)}`);
 };
 
-export const setCandidacyStatus = async (id, status) => {
+export const setCandidacyStatus = async (id, status, adminPin) => {
   return request('/api/candidacy', {
     method: 'POST',
-    body: JSON.stringify({ action: 'status', id, status }),
+    body: JSON.stringify({ action: 'status', id, status, adminPin }),
   });
 };
 

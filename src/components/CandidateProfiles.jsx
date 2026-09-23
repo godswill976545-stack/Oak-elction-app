@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { subscribeToCandidates, submitPrimaryVote, submitSecondaryVote, submitStaffVote } from '../supabaseClient';
 import { Search, CheckCircle, ArrowLeft, ShieldAlert, X } from 'lucide-react';
 import StepIndicator from './StepIndicator';
@@ -23,11 +23,21 @@ const CandidateProfiles = ({
   const [votedCategories, setVotedCategories] = useState(() => new Set(initialVotedCategories));
   const [showThankYou, setShowThankYou] = useState(false);
   const [voteError, setVoteError] = useState('');
+  const finishTimer = useRef(null);
 
   useEffect(() => {
     const unsubscribe = subscribeToCandidates((data) => setCandidates(data));
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (finishTimer.current) clearTimeout(finishTimer.current);
+    };
   }, []);
+
+  const finishVoting = () => {
+    setShowThankYou(true);
+    if (finishTimer.current) clearTimeout(finishTimer.current);
+    finishTimer.current = setTimeout(() => onVoteComplete(), 3000);
+  };
 
   const grouped = useMemo(() => {
     const map = {};
@@ -76,8 +86,7 @@ const CandidateProfiles = ({
       setSelectedCandidate(null);
 
       if (categories.every((cat) => newVoted.has(cat))) {
-        setShowThankYou(true);
-        setTimeout(() => onVoteComplete(), 3000);
+        finishVoting();
       }
     } catch (err) {
       setVoteError(err.message);
@@ -194,8 +203,7 @@ const CandidateProfiles = ({
                     setVotedCategories(newVoted);
                     // If all categories voted, show thank you and finish
                     if (categories.every((cat) => newVoted.has(cat))) {
-                      setShowThankYou(true);
-                      setTimeout(() => onVoteComplete(), 3000);
+                      finishVoting();
                     }
                   })
                   .catch((err) => setVoteError(err.message))

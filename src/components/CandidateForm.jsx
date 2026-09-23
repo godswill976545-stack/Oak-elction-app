@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { submitCandidacy } from '../supabaseClient';
+import React, { useState, useEffect } from 'react';
+import { submitCandidacy, fetchParties } from '../supabaseClient';
 import { ScrollText, CheckCircle2, ShieldAlert, UploadCloud, XCircle, FileText, Award } from 'lucide-react';
 // eslint-disable-next-line no-unused-vars -- used in JSX as <motion.button>
 import { motion } from 'framer-motion';
@@ -53,6 +53,7 @@ const emptyForm = {
   gender: '',
   class: '',
   intended_post: '',
+  party: '',
   held_post: null,
   held_position: '',
   ran_before: null,
@@ -94,6 +95,11 @@ const CandidateForm = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [reference, setReference] = useState(null);
+  const [parties, setParties] = useState([]);
+
+  useEffect(() => {
+    fetchParties().then(setParties).catch(() => {});
+  }, []);
 
   const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
   const setBool = (k) => (v) => setForm((p) => ({ ...p, [k]: v }));
@@ -199,6 +205,7 @@ const CandidateForm = () => {
         gender: form.gender,
         class: form.class,
         intended_post: form.intended_post,
+        party: form.party || null,
         held_post: form.held_post,
         held_position: form.held_position,
         ran_before: form.ran_before,
@@ -256,7 +263,7 @@ const CandidateForm = () => {
         <div className="icon-circle">
           <ScrollText size={36} />
         </div>
-        <div className="section-label" style={{ color: 'var(--gold-700)' }}>OIEC 2025</div>
+        <div className="section-label" style={{ color: 'var(--gold-700)' }}>OIEC 26</div>
         <h2>Prefect Council Candidacy Form</h2>
         <p>Complete every section and attach the required documents.</p>
       </header>
@@ -268,7 +275,7 @@ const CandidateForm = () => {
       )}
 
       <form onSubmit={handleSubmit} className="flex-col">
-        <h3 className="cform-section">A. Identity</h3>
+        <h3 className="cform-section">Identity</h3>
         <div className="cform-grid">
           <div className="form-group">
             <label className="form-label" htmlFor="cf-surname">Surname</label>
@@ -301,7 +308,16 @@ const CandidateForm = () => {
           </select>
         </div>
         <div className="form-group">
-          <span className="form-label">Passport photo</span>
+          <label className="form-label" htmlFor="cf-party">Electoral party</label>
+          <select id="cf-party" className="input form-select" value={form.party} onChange={set('party')}>
+            <option value="">Independent / None</option>
+            {parties.map((p) => (
+              <option key={p.name} value={p.name}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="form-group">
+          <span className="form-label">Campaign photo</span>
           {photo ? (
             <div className="upload-preview" style={{ maxWidth: 220 }}>
               <img src={photo.url} alt="Passport preview" />
@@ -316,11 +332,11 @@ const CandidateForm = () => {
               <span className="upload-zone-hint">JPG or PNG — compressed automatically</span>
             </label>
           )}
-          <input id="cf-photo" type="file" accept="image/*" className="file-hidden" aria-label="Passport photo file"
+          <input id="cf-photo" type="file" accept="image/*" className="file-hidden" aria-label="Campaign photo file"
             onChange={(e) => { handlePhoto(e.target.files[0]); e.target.value = null; }} />
         </div>
 
-        <h3 className="cform-section">B. History</h3>
+        <h3 className="cform-section">History</h3>
         <YesNo label="Have you held a post in school?" value={form.held_post} onChange={setBool('held_post')} />
         {form.held_post && (
           <div className="form-group">
@@ -343,7 +359,6 @@ const CandidateForm = () => {
           </div>
         )}
 
-        <h3 className="cform-section">C. Essays</h3>
         <div className="form-group">
           <label className="form-label" htmlFor="cf-motivation">Why do you wish to run for that position?</label>
           <textarea id="cf-motivation" className="input" rows={5} value={form.motivation} onChange={set('motivation')} maxLength={2000} />
@@ -357,7 +372,7 @@ const CandidateForm = () => {
           <span className="cform-count">{form.achievements.length}/1000</span>
         </div>
 
-        <h3 className="cform-section">D. Attachments (NB)</h3>
+        <h3 className="cform-section">Attachments</h3>
         {[
           { key: 'cv', label: 'Updated CV', accept: '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document', file: cv, setFile: setCv, onPick: (f) => handleDoc(f, 'cv'), hint: 'PDF or Word, max 1MB' },
           { key: 'results', label: '10th grade results (English/French)', accept: '.pdf,.jpg,.jpeg,.png', file: results, setFile: setResults, onPick: (f) => handleDoc(f, 'results'), hint: 'PDF or image, max 1MB' },
@@ -383,7 +398,7 @@ const CandidateForm = () => {
           </div>
         ))}
 
-        <h3 className="cform-section">E. Attestation</h3>
+        <h3 className="cform-section">Attestation</h3>
         <label className="cform-attest">
           <input type="checkbox" checked={attested} onChange={(e) => setAttested(e.target.checked)} />
           <span>I attest that all the above statements are certified and true.</span>

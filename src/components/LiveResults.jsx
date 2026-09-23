@@ -75,12 +75,12 @@ const LiveResults = () => {
     return () => unsubscribe();
   }, []);
 
-  // Tick the relative-time label every second. The first tick also seeds
+  // Tick the relative-time label every few seconds. The first tick also seeds
   // the clock, so we don't need a separate mount-time setState.
   useEffect(() => {
     const tick = () => setNow(Date.now());
     tick();
-    const id = setInterval(tick, 1000);
+    const id = setInterval(tick, 5000);
     return () => clearInterval(id);
   }, []);
 
