@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS public.candidates (
     secondary_vote_count INT DEFAULT 0 NOT NULL
 );
 
--- 3. Admin PIN hash (SHA-256 hex, never plaintext). Default PIN "5793".
+-- 3. Admin PIN hashes (SHA-256 hex, never plaintext). Default PIN "5793".
+-- One row per admin: any matching PIN unlocks Primary Voting / Admin Dashboard
+-- and authorizes privileged API mutations (see api/_admin.js).
 CREATE TABLE IF NOT EXISTS public.admin_secrets (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -38,9 +40,20 @@ INSERT INTO public.admin_secrets (key, value)
 VALUES ('admin_pin_hash', '399bd91a2b1e5ebdb54a7aec97bc3f30c1c2a19a758556febf86ebe87bcfcd16')
 ON CONFLICT (key) DO NOTHING;
 
--- To rotate the PIN, run (replace with your new PIN's SHA-256 hex):
---   UPDATE public.admin_secrets SET value = '<sha256-hex>' WHERE key = 'admin_pin_hash';
--- Generate the hash locally with:
+CREATE TABLE IF NOT EXISTS public.admin_pins (
+    name TEXT PRIMARY KEY,
+    pin_hash TEXT NOT NULL
+);
+
+-- Seed the multi-PIN table from the legacy single PIN (idempotent).
+INSERT INTO public.admin_pins (name, pin_hash)
+SELECT 'default', value FROM public.admin_secrets WHERE key = 'admin_pin_hash'
+ON CONFLICT (name) DO NOTHING;
+
+-- To add another admin PIN, run (replace with the new PIN's SHA-256 hex):
+--   INSERT INTO public.admin_pins (name, pin_hash) VALUES ('admin-7', '<sha256-hex>');
+-- To revoke one: DELETE FROM public.admin_pins WHERE name = 'admin-7';
+-- Generate a hash locally with:
 --   node -e "console.log(require('crypto').createHash('sha256').update('YourNewPin').digest('hex'))"
 
 -- 4. Helpful indexes
