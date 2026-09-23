@@ -201,7 +201,7 @@ function App() {
           {currentView === 'menu' && !pendingMode && (
             <div className="mode-card">
               <div className="mode-logo">
-                <img src="/school-logo.png" alt="Oak International School" />
+                <img src="/oiec-logo.jpeg" alt="OIEC — Oak International School Electoral Commission" />
               </div>
               <div className="section-label">System Configuration</div>
               <h2>Select Mode</h2>
