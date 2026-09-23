@@ -205,6 +205,8 @@ const AdminDashboard = ({ adminPin }) => {
             <option value="Social Prefect">Social Prefect</option>
             <option value="Sports Prefect (Male)">Sports Prefect (Male)</option>
             <option value="Sports Prefect (Female)">Sports Prefect (Female)</option>
+            <option value="Food Prefect">Food Prefect</option>
+            <option value="Health and Hygiene Prefect">Health and Hygiene Prefect</option>
           </select>
         </div>
 

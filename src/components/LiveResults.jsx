@@ -35,6 +35,8 @@ const POSITION_ICONS = {
   'Social Prefect': '\u{1F389}',
   'Sports Prefect (Male)': '\u26BD',
   'Sports Prefect (Female)': '\u26BD',
+  'Food Prefect': '🍽️',
+  'Health and Hygiene Prefect': '🧼',
 };
 
 const formatRelative = (ms) => {

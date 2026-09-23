@@ -10,6 +10,8 @@ const POSITIONS = [
   'Social Prefect',
   'Sports Prefect (Male)',
   'Sports Prefect (Female)',
+  'Food Prefect',
+  'Health and Hygiene Prefect',
 ];
 
 const MAX_RAW_FILE = 1 * 1024 * 1024;

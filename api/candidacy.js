@@ -12,6 +12,8 @@ const POSITIONS = [
   'Social Prefect',
   'Sports Prefect (Male)',
   'Sports Prefect (Female)',
+  'Food Prefect',
+  'Health and Hygiene Prefect',
 ];
 
 // Vercel serverless functions cap request bodies at ~4.5MB, so per-file
