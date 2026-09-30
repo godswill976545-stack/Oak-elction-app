@@ -20,7 +20,7 @@ const totalOf = (c) => (c.primary_vote_count || 0) + (c.secondary_vote_count || 
 
 const PARTY_COLORS = {
   'Democratic Union': '#059669',
-  Eagles: '#fbbf24',
+  'Eagle of Freedom': '#fbbf24',
   Independent: '#78716c',
 };
 

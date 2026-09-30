@@ -26,3 +26,6 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Real voter roll (pupil PII) — import locally, never commit
+scripts/seed-roster.mjs

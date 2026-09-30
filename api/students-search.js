@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     const sql = getSql();
     const escaped = q.replace(/[\\%_]/g, (m) => `\\${m}`);
     const students = await sql.query(
-      "SELECT id, name, has_voted FROM primary_students WHERE name ILIKE $1 ESCAPE '\\' ORDER BY name LIMIT 20",
+      "SELECT id, name, class, has_voted FROM primary_students WHERE name ILIKE $1 ESCAPE '\\' ORDER BY lpad(class, 3, '0'), name LIMIT 20",
       [`%${escaped}%`]
     );
     const catRows = await sql.query('SELECT DISTINCT category FROM candidates');
@@ -34,7 +34,7 @@ export default async function handler(req, res) {
         if (complete && !s.has_voted) {
           await sql.query('UPDATE primary_students SET has_voted = true WHERE id = $1', [s.id]);
         }
-        return { id: s.id, name: s.name, complete, votedCategories };
+        return { id: s.id, name: s.name, class: s.class, complete, votedCategories };
       })
     );
     res.statusCode = 200;

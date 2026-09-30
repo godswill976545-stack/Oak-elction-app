@@ -5,17 +5,24 @@
 
 -- 1. Student rolls — one table per portal so the two elections never mix.
 --    Secondary portal voters live here; primary portal voters in primary_students.
+--    `class` holds the grade (1A-6C primary, 7A-12B secondary) so rolls read
+--    in grade order; both tables are CLUSTERED on (class, name).
 CREATE TABLE IF NOT EXISTS public.secondary_students (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    class TEXT,
     has_voted BOOLEAN DEFAULT FALSE NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS public.primary_students (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    class TEXT,
     has_voted BOOLEAN DEFAULT FALSE NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_primary_students_class ON primary_students (lpad(class, 3, '0'), name);
+CREATE INDEX IF NOT EXISTS idx_secondary_students_class ON secondary_students (lpad(class, 3, '0'), name);
 
 -- 2. Candidates (photo_url holds a data-URL or https URL; Neon has no storage bucket)
 CREATE TABLE IF NOT EXISTS public.candidates (
@@ -80,7 +87,7 @@ CREATE TABLE IF NOT EXISTS public.parties (
 );
 
 INSERT INTO public.parties (name, short_code, logo_url)
-VALUES ('Democratic Union', 'A', NULL), ('Eagles', 'B', NULL)
+VALUES ('Democratic Union', 'A', NULL), ('Eagle of Freedom', 'B', NULL)
 ON CONFLICT (name) DO NOTHING;
 
 -- 7. Candidate party + staff tally.
