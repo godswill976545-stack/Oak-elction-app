@@ -172,7 +172,9 @@ const CandidateForm = () => {
       if (file.type.startsWith('image/')) {
         setSignature({ name: file.name.replace(/\.[^.]+$/, '') + '.jpg', blob: await compressImage(file, 800, 0.85), mime: 'image/jpeg' });
       } else {
-        setSignature({ name: file.name, blob: file, mime: file.type || 'application/octet-stream' });
+        // The picker offers image/* and .pdf; fall back to PDF when the
+        // browser reports no type (matches the only non-image option).
+        setSignature({ name: file.name, blob: file, mime: file.type || 'application/pdf' });
       }
     } catch (err) {
       setError(err.message);

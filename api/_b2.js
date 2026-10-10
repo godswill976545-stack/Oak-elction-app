@@ -138,15 +138,18 @@ export async function putObject(key, body, contentType) {
 export async function deleteObject(key) {
   const a = await ensureAuth();
   // b2_delete_file_by_name needs the fileId of the current version; get it
-  // from a name listing rather than a second round-trip API.
+  // from a name listing rather than a second round-trip API. The param is
+  // `prefix`, not `fileName` — B2 rejects the latter with a 400 that this
+  // function used to swallow, which made every delete silently no-op.
   const list = await fetch(
     `${a.apiUrl}/b2api/v2/b2_list_file_names` +
-      `?bucketId=${encodeURIComponent(a.bucketId)}&fileName=${encodeURIComponent(key)}&maxFileCount=1`,
+      `?bucketId=${encodeURIComponent(a.bucketId)}&prefix=${encodeURIComponent(key)}&maxFileCount=1`,
     { headers: { Authorization: a.token } }
   );
   if (!list.ok) return false; // already gone / never existed
   const files = (await list.json()).files || [];
-  if (files.length === 0) return false;
+  // prefix matches are a startswith, so an exact-name hit is required.
+  if (files.length === 0 || files[0].fileName !== key) return false;
   const del = await fetch(`${a.apiUrl}/b2api/v2/b2_delete_file_version`, {
     method: 'POST',
     headers: { ...JSON_HEADERS, Authorization: a.token },

@@ -2,7 +2,7 @@ import { getSql } from './_db.js';
 import { isAdminRequest } from './_admin.js';
 import {
   candidacyKey, isStagingKey, isValidUpload, extFor,
-  stagingKey, stagingToken, MAX_UPLOAD_BYTES,
+  stagingKey, stagingToken, MAX_UPLOAD_BYTES, SLOTS,
 } from './_media.js';
 import { putObject, getObject, deleteObject, getUploadUrl } from './_b2.js';
 import { rateLimiter, clientIp } from './_rate.js';
@@ -146,6 +146,35 @@ export default async function handler(req, res) {
         if (apps.length === 0) return send(res, 404, { error: 'Application not found.' });
         const app = apps[0];
 
+        // Rejection is terminal. Rejecting deletes the application's uploads
+        // from B2, so a later re-approval could never re-key the photo and
+        // would publish a candidate with none. Block the transition up front
+        // rather than discovering it once files are already gone.
+        if (app.status === 'rejected' && b.status !== 'rejected') {
+          return send(res, 409, {
+            error: 'This application was rejected and its files were deleted. It cannot be re-approved — ask the student to submit a new application.',
+          });
+        }
+        if (app.status === 'rejected' && b.status === 'rejected') {
+          return send(res, 200, { id: app.id, status: 'rejected', candidateId: null });
+        }
+
+        // Verify the photo BEFORE the status write. Rejecting deletes the
+        // application's uploads, and an orphaned row may never have had them,
+        // so approving a candidate with no photo would put a nameless face on
+        // the ballot. Checking first keeps the write and the publish in step:
+        // otherwise a refusal below leaves the row marked approved with no
+        // candidate published, which is exactly the half-state this guards
+        // against. Covers both a first approval and a re-approval.
+        const src = b.status === 'approved' && app.photo_key
+          ? await getObject(app.photo_key)
+          : null;
+        if (b.status === 'approved' && app.photo_key && !src) {
+          return send(res, 409, {
+            error: 'This application\'s uploaded photo is no longer available, so it cannot be approved.',
+          });
+        }
+
         const updated = await sql.query(
           'UPDATE candidacy_applications SET status = ? WHERE id = ? RETURNING id, status',
           [b.status, b.id]
@@ -174,15 +203,15 @@ export default async function handler(req, res) {
             }
           } else {
             candidateId = `${slug(fullName)}-${String(app.id).toLowerCase().replace(/[^a-z0-9]+/g, '').slice(-6)}${Date.now().toString(36)}`;
+            // The photo is verified to exist above, so this re-keys it under
+            // the candidate. Deleting an application later can never break
+            // the ballot, because the candidate owns its own copy.
             let photoKey = null;
             let photoMime = null;
-            if (app.photo_key) {
-              const src = await getObject(app.photo_key);
-              if (src) {
-                photoKey = `candidates/${candidateId}/photo.${extFor(src.contentType || 'image/jpeg')}`;
-                photoMime = src.contentType || 'image/jpeg';
-                await putObject(photoKey, src.body, photoMime);
-              }
+            if (src) {
+              photoKey = `candidates/${candidateId}/photo.${extFor(src.contentType || 'image/jpeg')}`;
+              photoMime = src.contentType || 'image/jpeg';
+              await putObject(photoKey, src.body, photoMime);
             }
             await sql.query(
               `INSERT INTO candidates
@@ -206,6 +235,25 @@ export default async function handler(req, res) {
           );
           if (rows.length > 0) {
             await sql.query('DELETE FROM candidates WHERE id = ?', [rows[0].id]);
+          }
+          // A rejected application is never shown again, so its uploads are
+          // dead weight in B2. Delete them; the row keeps its *_key columns
+          // so the decision stays auditable, they just no longer resolve.
+          for (const slot of SLOTS) {
+            const key = app[`${slot}_key`];
+            if (!key) continue;
+            try {
+              const gone = await deleteObject(key);
+              // `false` just means it was already gone (never uploaded, or
+              // cleaned up on an earlier attempt) — not worth an alert.
+              if (!gone) console.warn(`candidacy ${app.id}: ${slot} upload already gone (${key})`);
+            } catch (e) {
+              // Deletion is best-effort cleanup; the reject itself succeeded,
+              // so log rather than fail the request. The guard above makes
+              // this safe: a rejected application can never be re-approved,
+              // so a lingering file is wasted storage, not a correctness bug.
+              console.error(`candidacy ${app.id}: failed to delete ${slot} upload ${key}: ${e?.message}`);
+            }
           }
         }
         return send(res, 200, { ...updated[0], candidateId });

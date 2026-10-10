@@ -44,13 +44,20 @@ export const MAX_UPLOAD_BYTES = 4_500_000; // 4.5MB — B2 presigned cap is 5MB
 
 export const SLOTS = ['photo', 'cv', 'results', 'signature'];
 
-// Content types accepted per slot. `photo`/`signature`/image results are
-// raster images; CV is a document.
+// Content types accepted per slot. These must cover every type the form's
+// file picker offers (CandidateForm.jsx accept attributes) — a mismatch
+// means the student fills in the whole form and gets rejected at submit.
+// photo/signature images are compressed to JPEG client-side before upload;
+// signature also takes a PDF because the form offers .pdf.
 const SLOT_TYPES = {
   photo: ['image/jpeg', 'image/png', 'image/webp'],
-  cv: ['application/pdf'],
+  cv: [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ],
   results: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
-  signature: ['image/png', 'image/jpeg'],
+  signature: ['image/png', 'image/jpeg', 'application/pdf'],
 };
 
 export function isValidUpload(slot, mime) {
@@ -68,7 +75,15 @@ export const stagingKey = (token, mime) => `staging/${token}.${extOf(mime)}`;
 // A key is "staging" if it lives under the staging/ prefix.
 export const isStagingKey = (key) => typeof key === 'string' && key.startsWith('staging/');
 
-const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf' };
+const EXT = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+};
 export function extFor(mime) {
   return EXT[mime] || 'bin';
 }
