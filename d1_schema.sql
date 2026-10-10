@@ -74,6 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_secondary_students_class ON secondary_students (c
 CREATE TABLE IF NOT EXISTS staff (
     code TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    department TEXT,
     has_voted INTEGER DEFAULT 0 NOT NULL
 );
 
