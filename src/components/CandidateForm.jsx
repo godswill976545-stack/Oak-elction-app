@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { submitCandidacy, fetchParties } from '../supabaseClient';
+import { submitCandidacy, fetchParties, requestUploadUrl } from '../supabaseClient';
 import { ScrollText, CheckCircle2, ShieldAlert, UploadCloud, XCircle, FileText, Award } from 'lucide-react';
 // eslint-disable-next-line no-unused-vars -- used in JSX as <motion.button>
 import { motion } from 'framer-motion';
@@ -19,13 +19,13 @@ const POSITIONS = [
   "Acorn's Captain",
 ];
 
-const MAX_RAW_FILE = 1 * 1024 * 1024;
-const MAX_PHOTO_URL = 1_600_000;
-const MAX_DOC_URL = 1_400_000;
-const MAX_SIG_URL = 1_000_000;
+// Files go straight to B2 (see the upload-url action + _media.js), so the only
+// limit is B2's presigned cap: 4.5MB, enforced here and again on the server.
+const MAX_FILE_BYTES = 4_500_000;
+const MAX_FILE_LABEL = '4.5MB';
 
-// Downscale large photos/results images so the whole submission stays
-// comfortably under serverless body limits. Returns a JPEG data-URL.
+// Downscale large photos/results images so ballots stay light. Returns a
+// JPEG blob (not a data-URL — the blob is what gets PUT to B2).
 const compressImage = (file, maxDim = 1600, quality = 0.82) =>
   new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -37,7 +37,7 @@ const compressImage = (file, maxDim = 1600, quality = 0.82) =>
       canvas.height = Math.max(1, Math.round(img.height * scale));
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', quality));
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Could not read that image.'))), 'image/jpeg', quality);
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
@@ -46,13 +46,26 @@ const compressImage = (file, maxDim = 1600, quality = 0.82) =>
     img.src = url;
   });
 
-const readAsDataUrl = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (ev) => resolve(ev.target.result);
-    reader.onerror = () => reject(new Error('Could not read that file.'));
-    reader.readAsDataURL(file);
+// Upload one blob straight to B2 via a presigned URL, then return the
+// staging key the server will re-key on submit.
+const sha1Hex = async (blob) => {
+  const buf = await blob.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-1', buf);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+
+const uploadToB2 = async (blob, slot, mime) => {
+  const info = await requestUploadUrl(slot, mime);
+  const res = await fetch(info.uploadUrl, {
+    method: info.method,
+    headers: { ...info.headers, 'X-Bz-Content-Sha1': await sha1Hex(blob) },
+    body: blob,
   });
+  if (!res.ok) {
+    throw new Error('An upload failed. Please check your connection and try again.');
+  }
+  return info.key;
+};
 
 const emptyForm = {
   surname: '',
@@ -111,16 +124,19 @@ const CandidateForm = () => {
   const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
   const setBool = (k) => (v) => setForm((p) => ({ ...p, [k]: v }));
 
+  // Pick-time work is validation + downscale only; the actual upload to B2
+  // happens at submit so a student who abandons the form never leaves files
+  // behind, and a slow upload doesn't block them from filling the rest.
   const handlePhoto = async (file) => {
     if (!file) return;
     setError('');
+    if (file.size > MAX_FILE_BYTES) {
+      setError(`Photo must be under ${MAX_FILE_LABEL}.`);
+      return;
+    }
     try {
-      const url = await compressImage(file);
-      if (url.length > MAX_PHOTO_URL) {
-        setError('Photo is still too large after compression. Use a smaller image (under ~1MB).');
-        return;
-      }
-      setPhoto({ name: file.name, url });
+      const blob = await compressImage(file);
+      setPhoto({ name: file.name, blob, mime: 'image/jpeg', preview: URL.createObjectURL(blob) });
     } catch (err) {
       setError(err.message);
     }
@@ -129,24 +145,17 @@ const CandidateForm = () => {
   const handleDoc = async (file, kind) => {
     if (!file) return;
     setError('');
-    if (file.size > MAX_RAW_FILE) {
-      setError(`${kind === 'cv' ? 'CV' : 'Results file'} must be under 1MB so the submission fits hosting limits.`);
+    if (file.size > MAX_FILE_BYTES) {
+      setError(`${kind === 'cv' ? 'CV' : 'Results file'} must be under ${MAX_FILE_LABEL}.`);
       return;
     }
     try {
-      let url;
-      let name = file.name;
+      const setter = kind === 'cv' ? setCv : setResults;
       if (file.type.startsWith('image/')) {
-        url = await compressImage(file);
-        name = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+        setter({ name: file.name.replace(/\.[^.]+$/, '') + '.jpg', blob: await compressImage(file), mime: 'image/jpeg' });
       } else {
-        url = await readAsDataUrl(file);
+        setter({ name: file.name, blob: file, mime: file.type || 'application/pdf' });
       }
-      if (url.length > MAX_DOC_URL) {
-        setError(`${kind === 'cv' ? 'CV' : 'Results file'} is too large. Keep it under ~1MB.`);
-        return;
-      }
-      (kind === 'cv' ? setCv : setResults)({ name, url, type: file.type });
     } catch (err) {
       setError(err.message);
     }
@@ -155,24 +164,16 @@ const CandidateForm = () => {
   const handleSignature = async (file) => {
     if (!file) return;
     setError('');
-    if (file.size > MAX_RAW_FILE) {
-      setError('Signature file must be under 1MB.');
+    if (file.size > MAX_FILE_BYTES) {
+      setError(`Signature file must be under ${MAX_FILE_LABEL}.`);
       return;
     }
     try {
-      let url;
-      let name = file.name;
       if (file.type.startsWith('image/')) {
-        url = await compressImage(file, 800, 0.85);
-        name = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+        setSignature({ name: file.name.replace(/\.[^.]+$/, '') + '.jpg', blob: await compressImage(file, 800, 0.85), mime: 'image/jpeg' });
       } else {
-        url = await readAsDataUrl(file);
+        setSignature({ name: file.name, blob: file, mime: file.type || 'application/octet-stream' });
       }
-      if (url.length > MAX_SIG_URL) {
-        setError('Signature is too large. Upload an image under ~700KB.');
-        return;
-      }
-      setSignature({ name, url, type: file.type });
     } catch (err) {
       setError(err.message);
     }
@@ -205,7 +206,17 @@ const CandidateForm = () => {
       return;
     }
     setBusy(true);
+    setError('Uploading your files…');
     try {
+      // Files go straight to B2 (not through the server, which is capped at
+      // 4.5MB per request). Only the staging keys ride in the JSON below.
+      const [photoKey, cvKey, resultsKey, signatureKey] = await Promise.all([
+        uploadToB2(photo.blob, 'photo', photo.mime),
+        uploadToB2(cv.blob, 'cv', cv.mime),
+        uploadToB2(results.blob, 'results', results.mime),
+        uploadToB2(signature.blob, 'signature', signature.mime),
+      ]);
+      setError('Submitting your application…');
       const res = await submitCandidacy({
         surname: form.surname,
         given_names: form.given_names,
@@ -221,18 +232,15 @@ const CandidateForm = () => {
         disciplinary_details: form.disciplinary_details,
         motivation: form.motivation,
         achievements: form.achievements,
-          attest_name: '',
-          attested: true,
-        signature_file: signature ? signature.url : null,
-        signature_filename: signature ? signature.name : null,
-        signature_mimetype: signature ? signature.type : null,
-        photo_url: photo.url,
-        cv_file: cv.url,
+        attest_name: '',
+        attested: true,
+        photo_key: photoKey,
+        cv_key: cvKey,
         cv_filename: cv.name,
-        cv_mimetype: cv.type,
-        results_file: results.url,
+        results_key: resultsKey,
         results_filename: results.name,
-        results_mimetype: results.type,
+        signature_key: signatureKey,
+        signature_filename: signature.name,
       });
       setReference(res.id);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -327,8 +335,8 @@ const CandidateForm = () => {
           <span className="form-label">Campaign photo</span>
           {photo ? (
             <div className="upload-preview" style={{ maxWidth: 220 }}>
-              <img src={photo.url} alt="Passport preview" />
-              <button type="button" className="upload-preview-remove" onClick={() => setPhoto(null)} aria-label="Remove photo">
+              <img src={photo.preview} alt="Passport preview" />
+              <button type="button" className="upload-preview-remove" onClick={() => { URL.revokeObjectURL(photo.preview); setPhoto(null); }} aria-label="Remove photo">
                 <XCircle size={18} />
               </button>
             </div>
@@ -381,8 +389,8 @@ const CandidateForm = () => {
 
         <h3 className="cform-section">Attachments</h3>
         {[
-          { key: 'cv', label: 'Updated CV', accept: '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document', file: cv, setFile: setCv, onPick: (f) => handleDoc(f, 'cv'), hint: 'PDF or Word, max 1MB' },
-          { key: 'results', label: '10th grade results (English/French)', accept: '.pdf,.jpg,.jpeg,.png', file: results, setFile: setResults, onPick: (f) => handleDoc(f, 'results'), hint: 'PDF or image, max 1MB' },
+          { key: 'cv', label: 'Updated CV', accept: '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document', file: cv, setFile: setCv, onPick: (f) => handleDoc(f, 'cv'), hint: `PDF or Word, max ${MAX_FILE_LABEL}` },
+          { key: 'results', label: '10th grade results (English/French)', accept: '.pdf,.jpg,.jpeg,.png', file: results, setFile: setResults, onPick: (f) => handleDoc(f, 'results'), hint: `PDF or image, max ${MAX_FILE_LABEL}` },
         ].map((d) => (
           <div className="form-group" key={d.key}>
             <span className="form-label">{d.label}</span>
@@ -424,7 +432,7 @@ const CandidateForm = () => {
             <label htmlFor="cf-sign" className="upload-zone" style={{ padding: 'var(--sp-6)' }}>
               <div className="upload-zone-icon"><UploadCloud size={20} /></div>
               <span className="upload-zone-text">Upload your e-signature</span>
-              <span className="upload-zone-hint">PNG, JPG or PDF — max 1MB</span>
+              <span className="upload-zone-hint">{`PNG, JPG or PDF — max ${MAX_FILE_LABEL}`}</span>
             </label>
           )}
           <input id="cf-sign" type="file" accept="image/*,.pdf" className="file-hidden" aria-label="Signature file"

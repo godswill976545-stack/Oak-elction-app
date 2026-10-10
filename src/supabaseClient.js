@@ -118,6 +118,16 @@ export const verifyAdminPin = async (pin) => {
   return data.ok && data.token ? data.token : null;
 };
 
+// Ask the server for a B2 presigned upload URL. The file itself goes
+// straight to B2 from the browser (a 4.5MB file cannot ride inside a
+// serverless request body); submitCandidacy then sends only the key.
+export const requestUploadUrl = (slot, mime) => {
+  return request('/api/candidacy?action=upload-url', {
+    method: 'POST',
+    body: JSON.stringify({ slot, mime }),
+  });
+};
+
 // Candidacy applications (hidden /candidate-form + admin review)
 export const submitCandidacy = async (payload) => {
   return request('/api/candidacy', {

@@ -1,16 +1,20 @@
 import { getSql } from './_db.js';
 import { isAdminRequest } from './_admin.js';
-import { splitDataUrl, candidacyKey, extFor } from './_media.js';
-import { putObject, getObject } from './_b2.js';
+import {
+  candidacyKey, isStagingKey, isValidUpload, extFor,
+  stagingKey, stagingToken, MAX_UPLOAD_BYTES,
+} from './_media.js';
+import { putObject, getObject, deleteObject, getUploadUrl } from './_b2.js';
+import { rateLimiter, clientIp } from './_rate.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(body));
 }
 
-// B2 native REST has no presigned URLs, so sensitive attachments are served
-// through the authenticated /api/media?candidacy=<id>&slot=<x> proxy. The
-// browser must send the admin token header on the fetch (see AdminDashboard).
+// Sensitive attachments are served through the authenticated
+// /api/media?candidacy=<id>&slot=<x> proxy. The browser must send the admin
+// token header on the fetch (see AdminDashboard).
 const mediaProxyUrl = (id, slot) => `/api/media?candidacy=${encodeURIComponent(id)}&slot=${slot}`;
 
 const POSITIONS = [
@@ -28,15 +32,7 @@ const POSITIONS = [
   "Acorn's Captain",
 ];
 
-// Vercel serverless functions cap request bodies at ~4.5MB, so per-file
-// data-URL caps are sized so a full submission stays under that budget.
-// (Local `server.js` allows 12MB — production is the constraint.)
-const MAX_PHOTO_CHARS = 1_600_000;
-const MAX_DOC_CHARS = 1_400_000;
-const MAX_SIG_CHARS = 1_000_000;
-
 const isBlank = (s) => typeof s !== 'string' || s.trim().length === 0;
-const tooBig = (s, max) => typeof s !== 'string' || s.length === 0 || s.length > max;
 
 const slug = (s) =>
   s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'candidate';
@@ -54,7 +50,49 @@ function shapeDetail(row) {
   };
 }
 
+// Minting presigned URLs is public (students submit) and needs no DB, so it
+// branches off before getSql(). Separate limiter from the candidacy routes.
+const uploadUrlLimiter = rateLimiter({ max: 40, windowMs: 10 * 60 * 1000 });
+
 export default async function handler(req, res) {
+  // Mints a short-lived B2 presigned upload URL for one file. The browser
+  // cannot push a 4.5MB file through a Vercel function body (Hobby caps
+  // request bodies at 4.5MB), so it uploads straight to B2 and submits only
+  // the key here. The minted key is staging/<random> — never a real
+  // candidacy/<id>/ path — so a client cannot overwrite a published photo
+  // even though a B2 upload URL can write any name in the bucket. Routed via
+  // /api/candidacy?action=upload-url because the Hobby plan caps a deployment
+  // at 12 functions.
+  if (req.method === 'POST' && req.query?.action === 'upload-url') {
+    try {
+      if (!uploadUrlLimiter.allow(clientIp(req))) {
+        return send(res, 429, { error: 'Too many upload requests. Try again shortly.' });
+      }
+      const { slot, mime } = req.body || {};
+      if (!isValidUpload(slot, mime)) {
+        return send(res, 400, { error: 'Unsupported file type for that field.' });
+      }
+      const { uploadUrl, uploadAuthToken } = await getUploadUrl();
+      const key = stagingKey(await stagingToken(), mime);
+      return send(res, 200, {
+        uploadUrl,
+        uploadAuthToken,
+        key,
+        maxBytes: MAX_UPLOAD_BYTES,
+        method: 'POST',
+        headers: {
+          Authorization: uploadAuthToken,
+          'Content-Type': mime,
+          'X-Bz-File-Name': key,
+          // Client fills in X-Bz-Content-Sha1 (SubtleCrypto) before sending.
+        },
+      });
+    } catch (e) {
+      console.error('upload-url failed:', e?.message);
+      return send(res, 500, { error: 'Could not start an upload. Please try again.' });
+    }
+  }
+
   const sql = getSql();
 
   // Detail view for admin review.
@@ -173,29 +211,44 @@ export default async function handler(req, res) {
         return send(res, 200, { ...updated[0], candidateId });
       }
 
-      // New submission from the digital candidacy form (file-only signature).
-      const required = ['surname', 'given_names', 'gender', 'class', 'intended_post', 'motivation', 'photo_url'];
+      // New submission from the digital candidacy form. Attachments are NOT
+      // inlined (a 4.5MB file cannot ride inside a Vercel function body);
+      // the browser uploaded each one straight to B2 via the upload-url
+      // action above and submits only the staging key. See _media.js.
+      const required = ['surname', 'given_names', 'gender', 'class', 'intended_post', 'motivation'];
       for (const f of required) {
         if (isBlank(b[f])) return send(res, 400, { error: `Missing required field: ${f}.` });
       }
       if (!b.attested) return send(res, 400, { error: 'The attestation must be confirmed.' });
-      if (tooBig(b.signature_file, MAX_SIG_CHARS)) {
-        return send(res, 413, { error: 'The e-signature is missing or too large. Upload an image under ~700KB.' });
-      }
-      if (tooBig(b.photo_url, MAX_PHOTO_CHARS)) {
-        return send(res, 413, { error: 'The photo is too large. Use a smaller image (under ~1MB).' });
-      }
-      for (const f of ['cv_file', 'results_file']) {
-        if (tooBig(b[f], MAX_DOC_CHARS)) {
-          return send(res, 413, { error: 'A document is missing or too large. Keep CV and results under ~1MB each.' });
-        }
-      }
       if (!POSITIONS.includes(b.intended_post)) {
         return send(res, 400, { error: 'Unknown intended post.' });
       }
-      if (!b.cv_filename || !b.results_filename) {
-        return send(res, 400, { error: 'CV and results files are required.' });
+
+      // Every attachment must be a staging key minted by the upload-url
+      // action. A raw data-URL or a non-staging key is rejected — the whole
+      // point is that the client can only reference files it uploaded to a
+      // random staging/ path, never a real candidacy/ or candidates/ key.
+      const files = [
+        ['photo', b.photo_key, 'The passport photo is required.'],
+        ['cv', b.cv_key, 'The CV is required.'],
+        ['results', b.results_key, 'The exam results file is required.'],
+        ['signature', b.signature_key, 'The e-signature is required.'],
+      ];
+      const resolved = {};
+      for (const [slot, key, msg] of files) {
+        if (!isStagingKey(key)) return send(res, 400, { error: msg });
+        const obj = await getObject(key);
+        if (!obj) {
+          return send(res, 400, {
+            error: 'One of your uploads did not finish. Please re-select the files and resubmit.',
+          });
+        }
+        if (!isValidUpload(slot, obj.contentType)) {
+          return send(res, 400, { error: `The ${slot} file type is not accepted.` });
+        }
+        resolved[slot] = { key, obj };
       }
+
       // Electoral party is optional (Independent when omitted), but when
       // given it must be a real party so approve() can publish it to the ballot.
       let partyName = null;
@@ -207,23 +260,16 @@ export default async function handler(req, res) {
 
       const id = `OIEC-26-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1296).toString(36).toUpperCase().padStart(2, '0')}`;
 
-      // Upload all attachments to R2 first — if any upload fails nothing is
-      // inserted and the student can retry cleanly.
-      const photo = splitDataUrl(b.photo_url);
-      const cv = splitDataUrl(b.cv_file);
-      const results = splitDataUrl(b.results_file);
-      const signature = splitDataUrl(b.signature_file);
-      if (!photo || !cv || !results) {
-        return send(res, 400, { error: 'One of the uploads was malformed. Please re-select the files.' });
+      // Re-key each staging object into candidacy/<id>/<slot>. — a path the
+      // client could not have written directly (it only ever held a random
+      // staging key). Delete the staging copy so it does not linger.
+      const finalKey = {};
+      for (const slot of ['photo', 'cv', 'results', 'signature']) {
+        const { key, obj } = resolved[slot];
+        finalKey[slot] = candidacyKey(id, slot, obj.contentType);
+        await putObject(finalKey[slot], obj.body, obj.contentType);
+        await deleteObject(key);
       }
-      const photoKey = candidacyKey(id, 'photo', photo.mime);
-      const cvKey = candidacyKey(id, 'cv', cv.mime);
-      const resultsKey = candidacyKey(id, 'results', results.mime);
-      const signatureKey = signature ? candidacyKey(id, 'signature', signature.mime) : null;
-      await putObject(photoKey, photo.bytes, photo.mime);
-      await putObject(cvKey, cv.bytes, cv.mime);
-      await putObject(resultsKey, results.bytes, results.mime);
-      if (signature) await putObject(signatureKey, signature.bytes, signature.mime);
 
       await sql.query(
         `INSERT INTO candidacy_applications
@@ -241,10 +287,10 @@ export default async function handler(req, res) {
           b.ran_before ? 1 : 0, (b.ran_position || '').trim(),
           b.disciplinary ? 1 : 0, (b.disciplinary_details || '').trim(),
           b.motivation.trim(), (b.achievements || '').trim(), (b.attest_name || '').trim(),
-          photoKey,
-          cvKey, b.cv_filename, b.cv_mimetype || 'application/octet-stream',
-          resultsKey, b.results_filename, b.results_mimetype || 'application/octet-stream',
-          signatureKey, b.signature_filename || 'signature', signature ? signature.mime : 'application/octet-stream',
+          finalKey.photo,
+          finalKey.cv, b.cv_filename || 'cv', resolved.cv.obj.contentType,
+          finalKey.results, b.results_filename || 'results', resolved.results.obj.contentType,
+          finalKey.signature, b.signature_filename || 'signature', resolved.signature.obj.contentType,
           partyName,
         ]
       );
