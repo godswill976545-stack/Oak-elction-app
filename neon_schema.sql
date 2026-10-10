@@ -24,7 +24,18 @@ CREATE TABLE IF NOT EXISTS public.primary_students (
 CREATE INDEX IF NOT EXISTS idx_primary_students_class ON primary_students (lpad(class, 3, '0'), name);
 CREATE INDEX IF NOT EXISTS idx_secondary_students_class ON secondary_students (lpad(class, 3, '0'), name);
 
--- 2. Candidates (photo_url holds a data-URL or https URL; Neon has no storage bucket)
+-- The primary portal searches names with ILIKE '%term%', which no btree index
+-- can serve — it scans the whole roll on every keystroke. A trigram GIN index
+-- turns that into an index lookup. pg_trgm is a stock extension on Neon.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_primary_students_name_trgm
+    ON primary_students USING GIN (name gin_trgm_ops);
+
+-- 2. Candidates. Media lives in `photo`/`party.logo` as BYTEA and is served by
+--    /api/media with immutable cache headers.
+--    photo_url is retained only for externally hosted images (an https URL).
+--    It previously held base64 data-URLs inline, which made /api/candidates
+--    return ~26MB and re-send it on every poll — see the BYTEA block at the end.
 CREATE TABLE IF NOT EXISTS public.candidates (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -87,7 +98,7 @@ CREATE TABLE IF NOT EXISTS public.parties (
 );
 
 INSERT INTO public.parties (name, short_code, logo_url)
-VALUES ('Democratic Union', 'A', NULL), ('Eagle of Freedom', 'B', NULL)
+VALUES ('Democratic Union', 'A', NULL), ('Eagles of Freedom', 'B', NULL)
 ON CONFLICT (name) DO NOTHING;
 
 -- 7. Candidate party + staff tally.
@@ -180,3 +191,43 @@ BEGIN
     END IF;
 END
 $$;
+
+-- ─── Media moved out of the JSON payloads ────────────────────────────────────
+-- Candidate photos and party logos were stored as base64 data-URLs in TEXT
+-- columns and returned inline by /api/candidates. With 25 candidates that made
+-- a single list response ~26MB, which the ballot screen then re-downloaded on
+-- every poll — minutes of loading on a school network.
+--
+-- Binary now lives in BYTEA and is served by /api/media, which sends
+-- immutable cache headers so the browser fetches each image exactly once.
+-- The original TEXT columns are left in place (data-URLs are blanked below
+-- after decoding) so older code paths degrade instead of exploding.
+
+ALTER TABLE public.candidates
+    ADD COLUMN IF NOT EXISTS photo BYTEA,
+    ADD COLUMN IF NOT EXISTS photo_mime TEXT;
+
+ALTER TABLE public.parties
+    ADD COLUMN IF NOT EXISTS logo BYTEA,
+    ADD COLUMN IF NOT EXISTS logo_mime TEXT;
+
+-- Decode any data-URL still sitting in the TEXT columns into BYTEA.
+-- regexp_replace strips the "data:<mime>;base64," prefix and leaves the payload
+-- untouched, including any line breaks; decode() ignores base64 whitespace.
+UPDATE public.candidates
+SET photo = decode(regexp_replace(photo_url, '^data:[^;,]+;base64,', ''), 'base64'),
+    photo_mime = substring(photo_url from '^data:([^;,]+);base64,')
+WHERE photo_url LIKE 'data:%' AND photo IS NULL;
+
+UPDATE public.parties
+SET logo = decode(regexp_replace(logo_url, '^data:[^;,]+;base64,', ''), 'base64'),
+    logo_mime = substring(logo_url from '^data:([^;,]+);base64,')
+WHERE logo_url LIKE 'data:%' AND logo IS NULL;
+
+-- Blank the base64 blobs out of the TEXT columns so no list query can ever
+-- drag 26MB again. /api/candidates serves the BYTEA copy instead.
+UPDATE public.candidates SET photo_url = '' WHERE photo_url LIKE 'data:%' AND photo IS NOT NULL;
+UPDATE public.parties SET logo_url = '' WHERE logo_url LIKE 'data:%' AND logo IS NOT NULL;
+
+-- photo_url is NOT NULL; keep direct inserts that omit it working.
+ALTER TABLE public.candidates ALTER COLUMN photo_url SET DEFAULT '';

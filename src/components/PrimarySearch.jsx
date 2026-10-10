@@ -7,7 +7,7 @@ import CandidateProfiles from './CandidateProfiles';
 
 // Primary portal: type a name, pick the voter, ballot opens. When voting
 // finishes the screen returns here with the search kept for the next voter.
-const PrimarySearch = () => {
+const PrimarySearch = ({ adminToken }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -28,7 +28,7 @@ const PrimarySearch = () => {
     setSearching(true);
     timer.current = setTimeout(async () => {
       try {
-        const data = await searchStudents(q);
+        const data = await searchStudents(q, adminToken);
         setResults(Array.isArray(data) ? data : []);
       } catch {
         setResults([]);
@@ -37,7 +37,7 @@ const PrimarySearch = () => {
       }
     }, 350);
     return () => timer.current && clearTimeout(timer.current);
-  }, [query, refreshTick]);
+  }, [query, refreshTick, adminToken]);
 
   const handleDone = () => {
     // Ballot finished: drop back to the name search for the next voter.

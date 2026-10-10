@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { subscribeToCandidates, submitPrimaryVote, submitSecondaryVote, submitStaffVote } from '../supabaseClient';
 import { Search, CheckCircle, ArrowLeft, ShieldAlert, X } from 'lucide-react';
 import StepIndicator from './StepIndicator';
-import ConfirmDialog from './ConfirmDialog';
 import BallotGrid from './BallotGrid';
 
 // Portal-agnostic ballot shell. portal: 'primary' | 'secondary' | 'staff'.
@@ -18,15 +17,26 @@ const CandidateProfiles = ({
 }) => {
   const [candidates, setCandidates] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [loading, setLoading] = useState(false);
   const [votedCategories, setVotedCategories] = useState(() => new Set(initialVotedCategories));
   const [showThankYou, setShowThankYou] = useState(false);
   const [voteError, setVoteError] = useState('');
+const [selectedId, setSelectedId] = useState(null);
   const finishTimer = useRef(null);
+  const seenRoster = useRef('');
 
   useEffect(() => {
-    const unsubscribe = subscribeToCandidates((data) => setCandidates(data));
+    // Only adopt a payload that actually differs from what's on screen.
+    // Poll ticks land mid-vote, and swapping in a fresh array every time
+    // re-rendered the whole grid under the voter's finger for no change.
+    // Vote counts are excluded on purpose — this screen only cares about who
+    // is on the ballot and which position they hold.
+    const unsubscribe = subscribeToCandidates((data) => {
+      const sig = data.map((c) => `${c.id}:${c.category}:${c.name}`).sort().join('|');
+      if (sig === seenRoster.current) return;
+      seenRoster.current = sig;
+      setCandidates(data);
+    });
     return () => {
       unsubscribe();
       if (finishTimer.current) clearTimeout(finishTimer.current);
@@ -68,33 +78,6 @@ const CandidateProfiles = ({
   const currentCategoryIndex = categories.findIndex((cat) => !votedCategories.has(cat));
   const currentCategory = currentCategoryIndex >= 0 ? categories[currentCategoryIndex] : null;
   const currentCandidates = currentCategory ? filteredGrouped[currentCategory] || [] : [];
-
-  const handleVote = async () => {
-    if (!selectedCandidate) return;
-    setLoading(true);
-    try {
-      if (portal === 'primary') {
-        await submitPrimaryVote(voterId, selectedCandidate.id);
-      } else if (portal === 'staff') {
-        await submitStaffVote(voterId, selectedCandidate.id);
-      } else {
-        await submitSecondaryVote(voterId, selectedCandidate.id);
-      }
-
-      const newVoted = new Set([...votedCategories, selectedCandidate.category]);
-      setVotedCategories(newVoted);
-      setSelectedCandidate(null);
-
-      if (categories.every((cat) => newVoted.has(cat))) {
-        finishVoting();
-      }
-    } catch (err) {
-      setVoteError(err.message);
-      setSelectedCandidate(null);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   /* Thank You Screen */
   if (showThankYou) {
@@ -191,26 +174,26 @@ const CandidateProfiles = ({
 
           <BallotGrid
             candidates={currentCandidates}
-            selectedId={selectedCandidate?.id || null}
+            selectedId={selectedId}
             onSelect={(c) => {
               setVoteError('');
-              if (portal === 'secondary') {
-                // Auto-submit and advance to next category for secondary portal
-                setLoading(true);
-                submitSecondaryVote(voterId, c.id)
-                  .then(() => {
-                    const newVoted = new Set([...votedCategories, c.category]);
-                    setVotedCategories(newVoted);
-                    // If all categories voted, show thank you and finish
-                    if (categories.every((cat) => newVoted.has(cat))) {
-                      finishVoting();
-                    }
-                  })
-                  .catch((err) => setVoteError(err.message))
-                  .finally(() => setLoading(false));
-              } else {
-                setSelectedCandidate(c);
-              }
+              setSelectedId(c.id);
+              setLoading(true);
+              const submit = portal === 'primary' ? submitPrimaryVote : portal === 'staff' ? submitStaffVote : submitSecondaryVote;
+              submit(voterId, c.id)
+                .then(() => {
+                  const newVoted = new Set([...votedCategories, c.category]);
+                  setVotedCategories(newVoted);
+                  setSelectedId(null);
+                  if (categories.every((cat) => newVoted.has(cat))) {
+                    finishVoting();
+                  }
+                })
+                .catch((err) => {
+                  setVoteError(err.message);
+                  setSelectedId(null);
+                })
+                .finally(() => setLoading(false));
             }}
             disabled={loading}
           />
@@ -263,15 +246,6 @@ const CandidateProfiles = ({
           ))}
         </div>
       )}
-
-      {/* Confirmation Modal */}
-      <ConfirmDialog
-        open={!!selectedCandidate}
-        candidate={selectedCandidate}
-        loading={loading}
-        onConfirm={handleVote}
-        onCancel={() => setSelectedCandidate(null)}
-      />
     </div>
   );
 };

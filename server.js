@@ -15,6 +15,7 @@ import voteStaffHandler from './api/vote-staff.js';
 import staffHandler from './api/staff.js';
 import candidacyHandler from './api/candidacy.js';
 import verifyPinHandler from './api/verify-pin.js';
+import mediaHandler from './api/media.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -40,6 +41,10 @@ app.post('/api/staff', route(staffHandler));
 app.get('/api/candidacy', route(candidacyHandler));
 app.post('/api/candidacy', route(candidacyHandler));
 app.post('/api/verify-pin', route(verifyPinHandler));
+// Vercel routes /api/media from api/media.js automatically; wire it here too so
+// local dev serves images the same way production does.
+app.get('/api/media', route(mediaHandler));
+app.head('/api/media', route(mediaHandler));
 
 // Serve the Vite build when present (after `npm run build`).
 app.use(express.static(path.join(__dirname, 'dist')));

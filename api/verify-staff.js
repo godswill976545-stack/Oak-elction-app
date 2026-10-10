@@ -2,6 +2,7 @@ import { getSql } from './_db.js';
 
 // Staff login looks ONLY in the staff table, so student IDs can never
 // sign in here (and staff codes can never sign in to the student portals).
+// One D1 batch = one transaction (see verify-student.js).
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
   if (req.method !== 'POST') {
@@ -18,34 +19,54 @@ export default async function handler(req, res) {
     }
     const sql = getSql();
     const code = staffCode.trim();
-    const rows = await sql.query('SELECT code, name, has_voted FROM staff WHERE code = $1', [code]);
-    const member = rows[0];
-    if (!member) {
+
+    const doneSql = `EXISTS (SELECT 1 FROM candidates)
+      AND NOT EXISTS (
+        SELECT 1 FROM candidates c
+        WHERE NOT EXISTS (
+          SELECT 1 FROM staff_votes v WHERE v.staff_code = ? AND v.category = c.category
+        )
+      )`;
+
+    const out = await sql.batch([
+      {
+        sql: `UPDATE staff SET has_voted = CASE WHEN ${doneSql} THEN 1 ELSE 0 END
+              WHERE code = ? AND has_voted IS NOT (CASE WHEN ${doneSql} THEN 1 ELSE 0 END)`,
+        params: [code, code, code],
+      },
+      {
+        sql: `SELECT s.code, s.name, s.has_voted,
+                     CASE WHEN ${doneSql} THEN 1 ELSE 0 END AS done,
+                     COALESCE(
+                       (SELECT json_group_array(v.category) FROM staff_votes v WHERE v.staff_code = s.code),
+                       '[]'
+                     ) AS voted_json
+              FROM staff s WHERE s.code = ?`,
+        params: [code, code],
+      },
+    ]);
+
+    const row = out[1]?.results?.[0];
+    if (!row) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: 'Invalid staff code. Please check and try again.' }));
       return;
     }
-
-    const votedRows = await sql.query('SELECT category FROM staff_votes WHERE staff_code = $1', [code]);
-    const votedCategories = votedRows.map((r) => r.category);
-    const allRows = await sql.query('SELECT DISTINCT category FROM candidates');
-    const allCategories = allRows.map((r) => r.category);
-    const done = allCategories.length > 0 && allCategories.every((c) => votedCategories.includes(c));
-
-    if (done) {
-      if (!member.has_voted) {
-        await sql.query('UPDATE staff SET has_voted = true WHERE code = $1', [code]);
-      }
+    if (row.done) {
       res.statusCode = 409;
       res.end(JSON.stringify({ error: 'This staff code has already voted!' }));
       return;
     }
-    if (member.has_voted) {
-      await sql.query('UPDATE staff SET has_voted = false WHERE code = $1', [code]);
-    }
 
     res.statusCode = 200;
-    res.end(JSON.stringify({ staffCode: member.code, name: member.name, verified: true, votedCategories }));
+    res.end(
+      JSON.stringify({
+        staffCode: row.code,
+        name: row.name,
+        verified: true,
+        votedCategories: JSON.parse(row.voted_json || '[]'),
+      })
+    );
   } catch {
     res.statusCode = 500;
     res.end(JSON.stringify({ error: 'Could not verify staff code. Please try again.' }));

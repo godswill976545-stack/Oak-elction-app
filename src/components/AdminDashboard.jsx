@@ -5,7 +5,40 @@ import { ShieldCheck, PlusCircle, UploadCloud, CheckCircle, XCircle, Flag, Users
 import { motion } from 'framer-motion';
 import PartyBadge from './PartyBadge';
 
-const AdminDashboard = ({ adminPin }) => {
+const compressImage = (file, maxDim = 1600, quality = 0.82) =>
+  new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read that image.'));
+    };
+    img.src = url;
+  });
+
+// B2 native REST has no presigned URLs, so candidacy attachments are served
+// via an authenticated /api/media?candidacy=<id>&slot=<x> route. A plain
+// <a href> cannot attach the admin token header, so we fetch the blob with
+// the token and open it in a new tab.
+const downloadAttachment = async (url, adminToken) => {
+  const res = await fetch(url, { headers: { 'x-admin-token': adminToken } });
+  if (!res.ok) throw new Error(`Download failed (${res.status}).`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  window.open(objectUrl, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+};
+
+const AdminDashboard = ({ adminToken }) => {
   const [formData, setFormData] = useState({ name: '', category: 'Head Boy', manifesto: '', party: '' });
   const [photoPreview, setPhotoPreview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -23,22 +56,24 @@ const AdminDashboard = ({ adminPin }) => {
 
   useEffect(() => {
     fetchParties().then(setParties).catch(() => {});
-    fetchStaff().then(setStaffList).catch(() => {});
-    fetchCandidacies().then(setApplications).catch(() => {});
-  }, []);
+    fetchStaff(adminToken).then(setStaffList).catch(() => {});
+    fetchCandidacies(adminToken).then(setApplications).catch(() => {});
+  }, [adminToken]);
 
   const handleChange = (e) => setFormData((prev) => ({ ...prev, [e.target.name]: e.target.value }));
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) {
       setErrorMsg('Image must be under 5MB.');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = (ev) => setPhotoPreview(ev.target.result);
-    reader.readAsDataURL(file);
+    try {
+      setPhotoPreview(await compressImage(file));
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
   };
 
   const resetForm = () => {
@@ -58,9 +93,9 @@ const AdminDashboard = ({ adminPin }) => {
     setErrorMsg('');
     setSuccessMsg('');
     try {
-      // Neon has no storage bucket: the portrait is sent as a data-URL and
-      // stored directly in the candidate's photo_url column.
-      await addCandidate({ ...formData, party: formData.party || null, photo_url: photoPreview }, adminPin);
+      // The portrait is sent as a data-URL; the server uploads it to R2 and
+      // stores only the object key (see api/candidates.js).
+      await addCandidate({ ...formData, party: formData.party || null, photo_url: photoPreview }, adminToken);
 
       setSuccessMsg(`${formData.name} has been registered as a candidate.`);
       resetForm();
@@ -80,13 +115,8 @@ const AdminDashboard = ({ adminPin }) => {
     setLogoLoading(partyName);
     setErrorMsg('');
     try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (ev) => resolve(ev.target.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      const updated = await setPartyLogo(partyName, dataUrl, adminPin);
+      const dataUrl = await compressImage(file, 512, 0.85);
+      const updated = await setPartyLogo(partyName, dataUrl, adminToken);
       setParties((prev) => prev.map((p) => (p.name === updated.name ? updated : p)));
       setSuccessMsg(`${partyName} logo updated.`);
     } catch (err) {
@@ -105,7 +135,7 @@ const AdminDashboard = ({ adminPin }) => {
     setStaffLoading(true);
     setErrorMsg('');
     try {
-      const added = await addStaff(staffForm.code.trim(), staffForm.name.trim(), adminPin);
+      const added = await addStaff(staffForm.code.trim(), staffForm.name.trim(), adminToken);
       setStaffList((prev) => [...prev, { ...added, has_voted: false }].sort((a, b) => a.name.localeCompare(b.name)));
       setStaffForm({ code: '', name: '' });
       setSuccessMsg(`${added.name} registered for staff voting.`);
@@ -126,7 +156,7 @@ const AdminDashboard = ({ adminPin }) => {
     setAppDetail(null);
     setAppLoading(true);
     try {
-      setAppDetail(await fetchCandidacy(id));
+      setAppDetail(await fetchCandidacy(id, adminToken));
     } catch (err) {
       setErrorMsg(err.message);
       setExpandedApp(null);
@@ -139,7 +169,7 @@ const AdminDashboard = ({ adminPin }) => {
     setAppLoading(true);
     setErrorMsg('');
     try {
-      const updated = await setCandidacyStatus(id, status, adminPin);
+      const updated = await setCandidacyStatus(id, status, adminToken);
       setApplications((prev) => prev.map((a) => (a.id === id ? { ...a, status: updated.status } : a)));
       setAppDetail((prev) => (prev && prev.id === id ? { ...prev, status: updated.status } : prev));
       setSuccessMsg(
@@ -207,6 +237,11 @@ const AdminDashboard = ({ adminPin }) => {
             <option value="Sports Prefect (Female)">Sports Prefect (Female)</option>
             <option value="Food Prefect">Food Prefect</option>
             <option value="Health and Hygiene Prefect">Health and Hygiene Prefect</option>
+            <option value="Assistant Food Prefect">Assistant Food Prefect</option>
+            <option value="Crown's Captain">Crown's Captain</option>
+            <option value="Root's Captain">Root's Captain</option>
+            <option value="Trunk's Captain">Trunk's Captain</option>
+            <option value="Acorn's Captain">Acorn's Captain</option>
           </select>
         </div>
 
@@ -408,19 +443,19 @@ const AdminDashboard = ({ adminPin }) => {
                         <dd>{appDetail.attest_name || 'E-signed (file below)'}</dd>
                       </div>
                       <div style={{ display: 'flex', gap: 'var(--sp-2)', flexWrap: 'wrap' }}>
-                        <a className="btn btn-sm btn-outline" href={appDetail.photo_url} download={`photo-${appDetail.id}.jpg`}>
+                        <button type="button" className="btn btn-sm btn-outline" onClick={() => downloadAttachment(appDetail.photo_url, adminToken).catch((e) => setErrorMsg(e.message))}>
                           <Download size={14} /> Photo
-                        </a>
-                        <a className="btn btn-sm btn-outline" href={appDetail.cv_file} download={appDetail.cv_filename || 'cv'}>
+                        </button>
+                        <button type="button" className="btn btn-sm btn-outline" onClick={() => downloadAttachment(appDetail.cv_file, adminToken).catch((e) => setErrorMsg(e.message))}>
                           <Download size={14} /> CV
-                        </a>
-                        <a className="btn btn-sm btn-outline" href={appDetail.results_file} download={appDetail.results_filename || 'results'}>
+                        </button>
+                        <button type="button" className="btn btn-sm btn-outline" onClick={() => downloadAttachment(appDetail.results_file, adminToken).catch((e) => setErrorMsg(e.message))}>
                           <Download size={14} /> Results
-                        </a>
+                        </button>
                         {appDetail.signature_file && (
-                          <a className="btn btn-sm btn-outline" href={appDetail.signature_file} download={appDetail.signature_filename || `signature-${appDetail.id}`}>
+                          <button type="button" className="btn btn-sm btn-outline" onClick={() => downloadAttachment(appDetail.signature_file, adminToken).catch((e) => setErrorMsg(e.message))}>
                             <Download size={14} /> Signature
-                          </a>
+                          </button>
                         )}
                       </div>
                       <div style={{ display: 'flex', gap: 'var(--sp-2)', flexWrap: 'wrap' }}>

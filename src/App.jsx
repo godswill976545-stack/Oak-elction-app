@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Login from './components/Login';
 import StaffLogin from './components/StaffLogin';
 import PrimarySearch from './components/PrimarySearch';
@@ -28,9 +28,10 @@ function App() {
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [pinLoading, setPinLoading] = useState(false);
-  // Retained after verification: proves admin rights to the API on every
-  // privileged mutation (register candidate, approve, staff, logos).
-  const [adminPin, setAdminPin] = useState(null);
+  // Signed session token from /api/verify-pin (12h): proves admin rights to
+  // the API on every privileged mutation (register candidate, approve,
+  // staff, logos). Sent as x-admin-token; verified with pure HMAC server-side.
+  const [adminToken, setAdminToken] = useState(null);
 
   const handleSelectMode = (mode) => {
     if (mode === 'primary' || mode === 'admin') {
@@ -58,9 +59,9 @@ function App() {
     setPinLoading(true);
     setPinError('');
     try {
-      const ok = await verifyAdminPin(pinInput);
-      if (ok) {
-        if (pendingMode === 'admin' || pendingMode === 'primary') setAdminPin(pinInput);
+      const token = await verifyAdminPin(pinInput);
+      if (token) {
+        if (pendingMode === 'admin' || pendingMode === 'primary') setAdminToken(token);
         activateMode(pendingMode);
       } else {
         setPinError('Incorrect Admin PIN');
@@ -73,11 +74,11 @@ function App() {
     }
   };
 
-  const handleLoginSuccess = (studentId, votedCategories = []) => {
+  const handleLoginSuccess = useCallback((studentId, votedCategories = []) => {
     setLoggedInStudent(studentId);
     setInitialVotes(votedCategories);
     setCurrentView('vote');
-  };
+  }, []);
 
   const handleVoteComplete = () => {
     setLoggedInStudent(null);
@@ -94,11 +95,11 @@ function App() {
     setCurrentView('login');
   };
 
-  const handleStaffSuccess = (staffCode, votedCategories = []) => {
+  const handleStaffSuccess = useCallback((staffCode, votedCategories = []) => {
     setLoggedInStaff(staffCode);
     setInitialStaffVotes(votedCategories);
     setCurrentView('staff-vote');
-  };
+  }, []);
 
   const handleStaffComplete = () => {
     setLoggedInStaff(null);
@@ -118,7 +119,7 @@ function App() {
     setInitialVotes([]);
     setLoggedInStaff(null);
     setInitialStaffVotes([]);
-    setAdminPin(null);
+    setAdminToken(null);
   };
 
   const light = isLightView(currentView);
@@ -337,7 +338,7 @@ function App() {
             </div>
           )}
 
-          {currentView === 'primary-search' && <PrimarySearch />}
+          {currentView === 'primary-search' && <PrimarySearch adminToken={adminToken} />}
           {currentView === 'login' && <Login onLoginSuccess={handleLoginSuccess} />}
           {currentView === 'vote' && (
             <CandidateProfiles
@@ -361,7 +362,7 @@ function App() {
             />
           )}
           {currentView === 'results' && <LiveResults />}
-          {currentView === 'admin' && <AdminDashboard adminPin={adminPin} />}
+          {currentView === 'admin' && <AdminDashboard adminToken={adminToken} />}
           {currentView === 'candidate-form' && <CandidateForm />}
         </div>
       </main>

@@ -20,7 +20,7 @@ const totalOf = (c) => (c.primary_vote_count || 0) + (c.secondary_vote_count || 
 
 const PARTY_COLORS = {
   'Democratic Union': '#059669',
-  'Eagle of Freedom': '#fbbf24',
+  "Eagles of Freedom": '#fbbf24',
   Independent: '#78716c',
 };
 
@@ -37,6 +37,11 @@ const POSITION_ICONS = {
   'Sports Prefect (Female)': '\u26BD',
   'Food Prefect': '🍽️',
   'Health and Hygiene Prefect': '🧼',
+  'Assistant Food Prefect': '🍴',
+  "Crown's Captain": '👑',
+  "Root's Captain": '🌱',
+  "Trunk's Captain": '🌳',
+  "Acorn's Captain": '🌰',
 };
 
 const formatRelative = (ms) => {
@@ -73,7 +78,7 @@ const LiveResults = () => {
           setAnnouncedTotal(t);
         }
       }
-    });
+    }, { pollMs: 5000 });
     return () => unsubscribe();
   }, []);
 

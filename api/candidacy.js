@@ -1,10 +1,17 @@
 import { getSql } from './_db.js';
-import { isAdminPinValid } from './_admin.js';
+import { isAdminRequest } from './_admin.js';
+import { splitDataUrl, candidacyKey, extFor } from './_media.js';
+import { putObject, getObject } from './_b2.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(body));
 }
+
+// B2 native REST has no presigned URLs, so sensitive attachments are served
+// through the authenticated /api/media?candidacy=<id>&slot=<x> proxy. The
+// browser must send the admin token header on the fetch (see AdminDashboard).
+const mediaProxyUrl = (id, slot) => `/api/media?candidacy=${encodeURIComponent(id)}&slot=${slot}`;
 
 const POSITIONS = [
   'Head Boy',
@@ -14,6 +21,11 @@ const POSITIONS = [
   'Sports Prefect (Female)',
   'Food Prefect',
   'Health and Hygiene Prefect',
+  'Assistant Food Prefect',
+  "Crown's Captain",
+  "Root's Captain",
+  "Trunk's Captain",
+  "Acorn's Captain",
 ];
 
 // Vercel serverless functions cap request bodies at ~4.5MB, so per-file
@@ -29,17 +41,34 @@ const tooBig = (s, max) => typeof s !== 'string' || s.length === 0 || s.length >
 const slug = (s) =>
   s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'candidate';
 
+// Row -> API shape: B2 keys become authenticated /api/media proxy URLs so the
+// admin dashboard can preview/download (fetching with the admin token header).
+// Keys are never sent to the browser.
+function shapeDetail(row) {
+  return {
+    ...row,
+    photo_url: row.photo_key ? mediaProxyUrl(row.id, 'photo') : null,
+    cv_file: row.cv_key ? mediaProxyUrl(row.id, 'cv') : null,
+    results_file: row.results_key ? mediaProxyUrl(row.id, 'results') : null,
+    signature_file: row.signature_key ? mediaProxyUrl(row.id, 'signature') : null,
+  };
+}
+
 export default async function handler(req, res) {
   const sql = getSql();
 
   // Detail view for admin review.
   if (req.method === 'GET' && req.query?.id) {
     try {
-      const rows = await sql.query('SELECT * FROM candidacy_applications WHERE id = $1', [
+      if (!(await isAdminRequest(req, sql))) {
+        return send(res, 403, { error: 'Admin authorization required.' });
+      }
+      const rows = await sql.query('SELECT * FROM candidacy_applications WHERE id = ?', [
         String(req.query.id),
       ]);
       if (rows.length === 0) return send(res, 404, { error: 'Application not found.' });
-      return send(res, 200, rows[0]);
+      res.setHeader('Cache-Control', 'no-store');
+      return send(res, 200, shapeDetail(rows[0]));
     } catch (e) {
       console.error('candidacy detail failed:', e?.message);
       return send(res, 500, { error: 'Could not load application.' });
@@ -48,10 +77,14 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
+      if (!(await isAdminRequest(req, sql))) {
+        return send(res, 403, { error: 'Admin authorization required.' });
+      }
       const rows = await sql.query(
         `SELECT id, surname, given_names, gender, class, intended_post, party, status, created_at
          FROM candidacy_applications ORDER BY created_at DESC`
       );
+      res.setHeader('Cache-Control', 'no-store');
       return send(res, 200, rows);
     } catch (e) {
       console.error('candidacy list failed:', e?.message);
@@ -68,28 +101,30 @@ export default async function handler(req, res) {
         if (!['pending', 'approved', 'rejected'].includes(b.status)) {
           return send(res, 400, { error: 'Invalid status.' });
         }
-        if (!(await isAdminPinValid(b.adminPin, sql))) {
+        if (!(await isAdminRequest({ headers: {}, body: b }, sql))) {
           return send(res, 403, { error: 'Admin authorization required.' });
         }
-        const apps = await sql.query('SELECT * FROM candidacy_applications WHERE id = $1', [b.id]);
+        const apps = await sql.query('SELECT * FROM candidacy_applications WHERE id = ?', [b.id]);
         if (apps.length === 0) return send(res, 404, { error: 'Application not found.' });
         const app = apps[0];
 
         const updated = await sql.query(
-          'UPDATE candidacy_applications SET status = $2 WHERE id = $1 RETURNING id, status',
-          [b.id, b.status]
+          'UPDATE candidacy_applications SET status = ? WHERE id = ? RETURNING id, status',
+          [b.status, b.id]
         );
 
         // Approving publishes the applicant to the ballot so voters see them
         // immediately (LiveResults / voting portals poll /api/candidates).
-        // Idempotent: re-approving reuses the existing candidate row.
+        // Idempotent: re-approving reuses the existing candidate row. The
+        // application's R2 photo is re-keyed under the candidate so deleting
+        // an application later would never break the ballot.
         let candidateId = null;
         if (b.status === 'approved') {
           const fullName = `${(app.given_names || '').trim()} ${(app.surname || '').trim()}`.trim();
           const manifesto = [app.motivation, app.achievements ? `Achievements: ${app.achievements}` : null]
             .filter(Boolean).join('\n\n');
           const existing = await sql.query(
-            'SELECT id, party FROM candidates WHERE name = $1 AND category = $2 LIMIT 1',
+            'SELECT id, party FROM candidates WHERE name = ? AND category = ? LIMIT 1',
             [fullName, app.intended_post]
           );
           if (existing.length > 0) {
@@ -97,13 +132,26 @@ export default async function handler(req, res) {
             // Backfill the party if the application names one and the
             // ballot row doesn't have it yet (e.g. approved before parties existed).
             if (app.party && existing[0].party !== app.party) {
-              await sql.query('UPDATE candidates SET party = $2 WHERE id = $1', [candidateId, app.party]);
+              await sql.query('UPDATE candidates SET party = ? WHERE id = ?', [app.party, candidateId]);
             }
           } else {
             candidateId = `${slug(fullName)}-${String(app.id).toLowerCase().replace(/[^a-z0-9]+/g, '').slice(-6)}${Date.now().toString(36)}`;
+            let photoKey = null;
+            let photoMime = null;
+            if (app.photo_key) {
+              const src = await getObject(app.photo_key);
+              if (src) {
+                photoKey = `candidates/${candidateId}/photo.${extFor(src.contentType || 'image/jpeg')}`;
+                photoMime = src.contentType || 'image/jpeg';
+                await putObject(photoKey, src.body, photoMime);
+              }
+            }
             await sql.query(
-              'INSERT INTO candidates (id, name, category, manifesto, photo_url, party, primary_vote_count, secondary_vote_count, staff_vote_count) VALUES ($1, $2, $3, $4, $5, $6, 0, 0, 0)',
-              [candidateId, fullName, app.intended_post, manifesto || '—', app.photo_url, app.party || null]
+              `INSERT INTO candidates
+                 (id, name, category, manifesto, photo_url, photo_key, photo_mime, party,
+                  primary_vote_count, secondary_vote_count, staff_vote_count)
+               VALUES (?, ?, ?, ?, '', ?, ?, ?, 0, 0, 0)`,
+              [candidateId, fullName, app.intended_post, manifesto || '—', photoKey, photoMime, app.party || null]
             );
           }
         }
@@ -112,14 +160,14 @@ export default async function handler(req, res) {
         if (b.status === 'rejected') {
           const fullName = `${(app.given_names || '').trim()} ${(app.surname || '').trim()}`.trim();
           const rows = await sql.query(
-            `SELECT id FROM candidates WHERE name = $1 AND category = $2
+            `SELECT id FROM candidates WHERE name = ? AND category = ?
              AND COALESCE(primary_vote_count,0) = 0
              AND COALESCE(secondary_vote_count,0) = 0
              AND COALESCE(staff_vote_count,0) = 0 LIMIT 1`,
             [fullName, app.intended_post]
           );
           if (rows.length > 0) {
-            await sql.query('DELETE FROM candidates WHERE id = $1', [rows[0].id]);
+            await sql.query('DELETE FROM candidates WHERE id = ?', [rows[0].id]);
           }
         }
         return send(res, 200, { ...updated[0], candidateId });
@@ -152,32 +200,51 @@ export default async function handler(req, res) {
       // given it must be a real party so approve() can publish it to the ballot.
       let partyName = null;
       if (typeof b.party === 'string' && b.party.trim()) {
-        const found = await sql.query('SELECT name FROM parties WHERE name = $1', [b.party.trim()]);
+        const found = await sql.query('SELECT name FROM parties WHERE name = ?', [b.party.trim()]);
         if (found.length === 0) return send(res, 400, { error: 'Unknown political party.' });
         partyName = found[0].name;
       }
 
       const id = `OIEC-26-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1296).toString(36).toUpperCase().padStart(2, '0')}`;
+
+      // Upload all attachments to R2 first — if any upload fails nothing is
+      // inserted and the student can retry cleanly.
+      const photo = splitDataUrl(b.photo_url);
+      const cv = splitDataUrl(b.cv_file);
+      const results = splitDataUrl(b.results_file);
+      const signature = splitDataUrl(b.signature_file);
+      if (!photo || !cv || !results) {
+        return send(res, 400, { error: 'One of the uploads was malformed. Please re-select the files.' });
+      }
+      const photoKey = candidacyKey(id, 'photo', photo.mime);
+      const cvKey = candidacyKey(id, 'cv', cv.mime);
+      const resultsKey = candidacyKey(id, 'results', results.mime);
+      const signatureKey = signature ? candidacyKey(id, 'signature', signature.mime) : null;
+      await putObject(photoKey, photo.bytes, photo.mime);
+      await putObject(cvKey, cv.bytes, cv.mime);
+      await putObject(resultsKey, results.bytes, results.mime);
+      if (signature) await putObject(signatureKey, signature.bytes, signature.mime);
+
       await sql.query(
         `INSERT INTO candidacy_applications
          (id, surname, given_names, gender, class, intended_post,
           held_post, held_position, ran_before, ran_position,
           disciplinary, disciplinary_details, motivation, achievements, attest_name,
-          photo_url, cv_file, cv_filename, cv_mimetype,
-          results_file, results_filename, results_mimetype,
-          signature_file, signature_filename, signature_mimetype, party, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,'pending')`,
+          photo_key, cv_key, cv_filename, cv_mimetype,
+          results_key, results_filename, results_mimetype,
+          signature_key, signature_filename, signature_mimetype, party, status)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           id,
           b.surname.trim(), b.given_names.trim(), b.gender, b.class.trim(), b.intended_post,
-          !!b.held_post, (b.held_position || '').trim(),
-          !!b.ran_before, (b.ran_position || '').trim(),
-          !!b.disciplinary, (b.disciplinary_details || '').trim(),
+          b.held_post ? 1 : 0, (b.held_position || '').trim(),
+          b.ran_before ? 1 : 0, (b.ran_position || '').trim(),
+          b.disciplinary ? 1 : 0, (b.disciplinary_details || '').trim(),
           b.motivation.trim(), (b.achievements || '').trim(), (b.attest_name || '').trim(),
-          b.photo_url,
-          b.cv_file, b.cv_filename, b.cv_mimetype || 'application/octet-stream',
-          b.results_file, b.results_filename, b.results_mimetype || 'application/octet-stream',
-          b.signature_file, b.signature_filename || 'signature', b.signature_mimetype || 'application/octet-stream',
+          photoKey,
+          cvKey, b.cv_filename, b.cv_mimetype || 'application/octet-stream',
+          resultsKey, b.results_filename, b.results_mimetype || 'application/octet-stream',
+          signatureKey, b.signature_filename || 'signature', signature ? signature.mime : 'application/octet-stream',
           partyName,
         ]
       );

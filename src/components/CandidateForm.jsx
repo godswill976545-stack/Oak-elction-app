@@ -12,6 +12,11 @@ const POSITIONS = [
   'Sports Prefect (Female)',
   'Food Prefect',
   'Health and Hygiene Prefect',
+  'Assistant Food Prefect',
+  "Crown's Captain",
+  "Root's Captain",
+  "Trunk's Captain",
+  "Acorn's Captain",
 ];
 
 const MAX_RAW_FILE = 1 * 1024 * 1024;

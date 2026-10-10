@@ -4,6 +4,11 @@ import { getSql } from './_db.js';
 // IDs and staff codes can never sign in here. Lets a student in when they
 // still have at least one unvoted position, and tells the frontend which
 // positions they already completed so voting can resume mid-ballot.
+//
+// One D1 batch (one transaction): resync has_voted both ways (also clears the
+// flag when a position was added after the student finished), then read the
+// state. SQLite can't do data-modifying CTEs, so this is two statements
+// instead of Neon's one.
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
   if (req.method !== 'POST') {
@@ -20,37 +25,59 @@ export default async function handler(req, res) {
     }
     const sql = getSql();
     const sid = studentId.trim();
-    const rows = await sql.query('SELECT id, name, has_voted FROM secondary_students WHERE id = $1', [sid]);
-    const student = rows[0];
-    if (!student) {
+
+    // done := every current candidate category has a vote row. Computed in SQL
+    // so the UPDATE and the SELECT below always agree.
+    const doneSql = `EXISTS (SELECT 1 FROM candidates)
+      AND NOT EXISTS (
+        SELECT 1 FROM candidates c
+        WHERE NOT EXISTS (
+          SELECT 1 FROM votes v WHERE v.student_id = ? AND v.category = c.category
+        )
+      )`;
+
+    const out = await sql.batch([
+      // 1. Resync the cached flag (set when done, clear when a new position
+      //    appeared after the student finished).
+      {
+        sql: `UPDATE secondary_students SET has_voted = CASE WHEN ${doneSql} THEN 1 ELSE 0 END
+              WHERE id = ? AND has_voted IS NOT (CASE WHEN ${doneSql} THEN 1 ELSE 0 END)`,
+        params: [sid, sid, sid],
+      },
+      // 2. Read the post-sync state.
+      {
+        sql: `SELECT s.id, s.name, s.has_voted,
+                     CASE WHEN ${doneSql} THEN 1 ELSE 0 END AS done,
+                     COALESCE(
+                       (SELECT json_group_array(v.category) FROM votes v WHERE v.student_id = s.id),
+                       '[]'
+                     ) AS voted_json
+              FROM secondary_students s WHERE s.id = ?`,
+        params: [sid, sid],
+      },
+    ]);
+
+    const row = out[1]?.results?.[0];
+    if (!row) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: 'Invalid Student ID. Please check and try again.' }));
       return;
     }
-
-    const votedRows = await sql.query('SELECT category FROM votes WHERE student_id = $1', [sid]);
-    const votedCategories = votedRows.map((r) => r.category);
-    const allRows = await sql.query('SELECT DISTINCT category FROM candidates');
-    const allCategories = allRows.map((r) => r.category);
-    // Done only when every current position is covered. has_voted is just a
-    // cached flag: set it when complete, clear it if a new position was
-    // added after the student finished (so they can vote in the new one).
-    const done = allCategories.length > 0 && allCategories.every((c) => votedCategories.includes(c));
-
-    if (done) {
-      if (!student.has_voted) {
-        await sql.query('UPDATE secondary_students SET has_voted = true WHERE id = $1', [sid]);
-      }
+    if (row.done) {
       res.statusCode = 409;
       res.end(JSON.stringify({ error: 'You have already voted!' }));
       return;
     }
-    if (student.has_voted) {
-      await sql.query('UPDATE secondary_students SET has_voted = false WHERE id = $1', [sid]);
-    }
 
     res.statusCode = 200;
-    res.end(JSON.stringify({ studentId: student.id, name: student.name, verified: true, votedCategories }));
+    res.end(
+      JSON.stringify({
+        studentId: row.id,
+        name: row.name,
+        verified: true,
+        votedCategories: JSON.parse(row.voted_json || '[]'),
+      })
+    );
   } catch {
     res.statusCode = 500;
     res.end(JSON.stringify({ error: 'Could not verify student. Please try again.' }));

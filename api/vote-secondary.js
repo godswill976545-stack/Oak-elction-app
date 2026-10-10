@@ -1,8 +1,12 @@
 import { getSql } from './_db.js';
 
 // Secondary portal: one vote per (student, category), enforced by the
-// PRIMARY KEY on public.votes. secondary_students.has_voted flips only once
-// position is covered, so voters can finish remaining categories across sessions.
+// PRIMARY KEY on votes. secondary_students.has_voted flips only once
+// every position is covered, so voters can finish remaining categories across
+// sessions.
+//
+// One D1 batch = one transaction (see vote-primary.js for the changes()
+// chaining trick that replaces Postgres data-modifying CTEs).
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
   if (req.method !== 'POST') {
@@ -20,48 +24,66 @@ export default async function handler(req, res) {
     const sql = getSql();
     const sid = studentId.trim();
 
-    const students = await sql.query('SELECT id FROM secondary_students WHERE id = $1', [sid]);
-    if (students.length === 0) {
+    const out = await sql.batch([
+      {
+        sql: `SELECT
+                (SELECT COUNT(*) FROM secondary_students WHERE id = ?) AS student_found,
+                (SELECT COUNT(*) FROM candidates WHERE id = ?) AS candidate_found,
+                (SELECT category FROM candidates WHERE id = ?) AS category`,
+        params: [sid, candidateId, candidateId],
+      },
+      {
+        sql: `INSERT INTO votes (student_id, candidate_id, category)
+              SELECT ?, c.id, c.category
+              FROM candidates c
+              WHERE c.id = ?
+                AND EXISTS (SELECT 1 FROM secondary_students WHERE id = ?)
+              ON CONFLICT (student_id, category) DO NOTHING`,
+        params: [sid, candidateId, sid],
+      },
+      {
+        sql: `UPDATE candidates SET secondary_vote_count = secondary_vote_count + 1
+              WHERE id = ? AND (SELECT changes()) > 0`,
+        params: [candidateId],
+      },
+      {
+        sql: `UPDATE secondary_students SET has_voted = 1
+              WHERE id = ?
+                AND (SELECT changes()) > 0
+                AND (SELECT COUNT(*) FROM candidates) > 0
+                AND NOT EXISTS (
+                  SELECT 1 FROM candidates c
+                  WHERE NOT EXISTS (
+                    SELECT 1 FROM votes v
+                    WHERE v.student_id = ? AND v.category = c.category
+                  )
+                )`,
+        params: [sid, sid],
+      },
+    ]);
+
+    const diag = out[0]?.results?.[0] || {};
+    const inserted = out[1]?.meta?.changes || 0;
+    const flagged = out[3]?.meta?.changes || 0;
+
+    if (diag.student_found === 0) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: 'Student not found.' }));
       return;
     }
-
-    const cands = await sql.query('SELECT id, category FROM candidates WHERE id = $1', [candidateId]);
-    if (cands.length === 0) {
+    if (diag.candidate_found === 0) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: 'Candidate not found.' }));
       return;
     }
-    const category = cands[0].category;
-
-    // Atomic claim: only one request can insert this (student, category).
-    const inserted = await sql.query(
-      'INSERT INTO votes (student_id, candidate_id, category) VALUES ($1, $2, $3) ON CONFLICT (student_id, category) DO NOTHING RETURNING student_id',
-      [sid, candidateId, category]
-    );
-    if (inserted.length === 0) {
+    if (inserted === 0) {
       res.statusCode = 409;
-      res.end(JSON.stringify({ error: `You already voted for ${category}.` }));
+      res.end(JSON.stringify({ error: `You already voted for ${diag.category}.` }));
       return;
     }
 
-    await sql.query('UPDATE candidates SET secondary_vote_count = secondary_vote_count + 1 WHERE id = $1', [
-      candidateId,
-    ]);
-
-    // Close out the ballot once every position is covered.
-    const remaining = await sql.query(
-      `SELECT DISTINCT c.category FROM candidates c
-       WHERE c.category NOT IN (SELECT v.category FROM votes v WHERE v.student_id = $1)`,
-      [sid]
-    );
-    if (remaining.length === 0) {
-      await sql.query('UPDATE secondary_students SET has_voted = true WHERE id = $1', [sid]);
-    }
-
     res.statusCode = 200;
-    res.end(JSON.stringify({ success: true }));
+    res.end(JSON.stringify({ success: true, ballotComplete: flagged > 0 }));
   } catch {
     res.statusCode = 500;
     res.end(JSON.stringify({ error: 'Could not record vote. Please try again.' }));

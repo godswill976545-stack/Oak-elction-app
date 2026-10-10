@@ -9,24 +9,22 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "seed": "node scripts/seed-neon.cjs"
+    "pin": "node --env-file=.env scripts/set-admin-pin.mjs"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.1.0",
-    "@supabase/supabase-js": "^2.103.0",
     "chart.js": "^4.5.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.7.0",
-    "pg": "^8.23.0",
     "react": "^19.2.4",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@neondatabase/serverless": "^1.1.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",

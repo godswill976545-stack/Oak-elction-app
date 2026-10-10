@@ -1,5 +1,5 @@
 import { getSql } from './_db.js';
-import { isAdminPinValid } from './_admin.js';
+import { isAdminRequest } from './_admin.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
@@ -12,8 +12,16 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const sql = getSql();
+      if (!(await isAdminRequest(req, sql))) {
+        return send(res, 403, { error: 'Admin authorization required.' });
+      }
       const rows = await sql.query('SELECT code, name, has_voted FROM staff ORDER BY name');
-      return send(res, 200, rows);
+      res.setHeader('Cache-Control', 'no-store');
+      return send(
+        res,
+        200,
+        rows.map((r) => ({ code: r.code, name: r.name, has_voted: r.has_voted === 1 }))
+      );
     } catch {
       return send(res, 500, { error: 'Could not load staff.' });
     }
@@ -21,20 +29,20 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { code, name, adminPin } = req.body || {};
+      const { code, name, adminToken, adminPin } = req.body || {};
       const sql = getSql();
-      if (!(await isAdminPinValid(adminPin, sql))) {
+      if (!(await isAdminRequest({ headers: {}, body: { adminToken, adminPin } }, sql))) {
         return send(res, 403, { error: 'Admin authorization required.' });
       }
       if (!code?.trim() || !name?.trim()) {
         return send(res, 400, { error: 'Staff code and name are required.' });
       }
       const done = await sql.query(
-        'INSERT INTO staff (code, name, has_voted) VALUES ($1, $2, false) ON CONFLICT (code) DO NOTHING RETURNING code, name',
+        'INSERT INTO staff (code, name, has_voted) VALUES (?, ?, 0) ON CONFLICT (code) DO NOTHING RETURNING code, name',
         [code.trim(), name.trim()]
       );
       if (done.length === 0) return send(res, 409, { error: 'That staff code already exists.' });
-      return send(res, 201, done[0]);
+      return send(res, 201, { code: done[0].code, name: done[0].name, has_voted: false });
     } catch {
       return send(res, 500, { error: 'Could not register staff.' });
     }

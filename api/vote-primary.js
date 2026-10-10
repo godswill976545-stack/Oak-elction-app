@@ -2,7 +2,12 @@ import { getSql } from './_db.js';
 
 // Primary portal: named students from primary_students, one vote per
 // (student, category), recorded in primary_votes. primary_students.has_voted
-// position is covered.
+// flips once every position is covered.
+//
+// SQLite has no data-modifying CTEs, so the whole ballot write is ONE batch
+// (D1 runs it as a single transaction; later statements see earlier writes).
+// `changes()` lets later statements react to whether the INSERT actually
+// inserted (ON CONFLICT DO NOTHING reports 0), so the batch stays static SQL.
 export default async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json');
   if (req.method !== 'POST') {
@@ -20,46 +25,71 @@ export default async function handler(req, res) {
     const sql = getSql();
     const sid = studentId.trim();
 
-    const students = await sql.query('SELECT id FROM primary_students WHERE id = $1', [sid]);
-    if (students.length === 0) {
+    const out = await sql.batch([
+      // 1. Diagnostics up front.
+      {
+        sql: `SELECT
+                (SELECT COUNT(*) FROM primary_students WHERE id = ?) AS student_found,
+                (SELECT COUNT(*) FROM candidates WHERE id = ?) AS candidate_found,
+                (SELECT category FROM candidates WHERE id = ?) AS category`,
+        params: [sid, candidateId, candidateId],
+      },
+      // 2. Insert the vote (no-op on conflict).
+      {
+        sql: `INSERT INTO primary_votes (student_id, candidate_id, category)
+              SELECT ?, c.id, c.category
+              FROM candidates c
+              WHERE c.id = ?
+                AND EXISTS (SELECT 1 FROM primary_students WHERE id = ?)
+              ON CONFLICT (student_id, category) DO NOTHING`,
+        params: [sid, candidateId, sid],
+      },
+      // 3. Bump the tally only if statement 2 inserted.
+      {
+        sql: `UPDATE candidates SET primary_vote_count = primary_vote_count + 1
+              WHERE id = ? AND (SELECT changes()) > 0`,
+        params: [candidateId],
+      },
+      // 4. Flip has_voted when the ballot is now complete. changes() here
+      //    mirrors statement 3, which mirrors statement 2's insert.
+      {
+        sql: `UPDATE primary_students SET has_voted = 1
+              WHERE id = ?
+                AND (SELECT changes()) > 0
+                AND (SELECT COUNT(*) FROM candidates) > 0
+                AND NOT EXISTS (
+                  SELECT 1 FROM candidates c
+                  WHERE NOT EXISTS (
+                    SELECT 1 FROM primary_votes v
+                    WHERE v.student_id = ? AND v.category = c.category
+                  )
+                )`,
+        params: [sid, sid],
+      },
+    ]);
+
+    const diag = out[0]?.results?.[0] || {};
+    const inserted = out[1]?.meta?.changes || 0;
+    const flagged = out[3]?.meta?.changes || 0;
+
+    if (diag.student_found === 0) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: 'Student not found.' }));
       return;
     }
-
-    const cands = await sql.query('SELECT id, category FROM candidates WHERE id = $1', [candidateId]);
-    if (cands.length === 0) {
+    if (diag.candidate_found === 0) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: 'Candidate not found.' }));
       return;
     }
-    const category = cands[0].category;
-
-    const inserted = await sql.query(
-      'INSERT INTO primary_votes (student_id, candidate_id, category) VALUES ($1, $2, $3) ON CONFLICT (student_id, category) DO NOTHING RETURNING student_id',
-      [sid, candidateId, category]
-    );
-    if (inserted.length === 0) {
+    if (inserted === 0) {
       res.statusCode = 409;
-      res.end(JSON.stringify({ error: `This voter already voted for ${category}.` }));
+      res.end(JSON.stringify({ error: `This voter already voted for ${diag.category}.` }));
       return;
     }
 
-    await sql.query('UPDATE candidates SET primary_vote_count = primary_vote_count + 1 WHERE id = $1', [
-      candidateId,
-    ]);
-
-    const remaining = await sql.query(
-      `SELECT DISTINCT c.category FROM candidates c
-       WHERE c.category NOT IN (SELECT v.category FROM primary_votes v WHERE v.student_id = $1)`,
-      [sid]
-    );
-    if (remaining.length === 0) {
-      await sql.query('UPDATE primary_students SET has_voted = true WHERE id = $1', [sid]);
-    }
-
     res.statusCode = 200;
-    res.end(JSON.stringify({ success: true }));
+    res.end(JSON.stringify({ success: true, ballotComplete: flagged > 0 }));
   } catch {
     res.statusCode = 500;
     res.end(JSON.stringify({ error: 'Could not record vote. Please try again.' }));
