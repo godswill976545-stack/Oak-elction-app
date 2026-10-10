@@ -24,7 +24,8 @@ export default async function handler(req, res) {
       const rows = await sql.query(
         `SELECT c.id, c.name, c.category, c.manifesto, c.photo_key, c.photo_url, c.party,
                 c.primary_vote_count, c.secondary_vote_count, c.staff_vote_count,
-                p.short_code AS party_code, p.logo_key IS NOT NULL AS has_party_logo
+                p.short_code AS party_code, p.logo_key IS NOT NULL AS has_party_logo,
+                p.logo_updated_at AS party_logo_v
          FROM candidates c LEFT JOIN parties p ON p.name = c.party
          ORDER BY c.category, c.name`
       );
@@ -44,7 +45,9 @@ export default async function handler(req, res) {
           secondary_vote_count: r.secondary_vote_count,
           staff_vote_count: r.staff_vote_count,
           party_code: r.party_code,
-          party_logo: r.has_party_logo ? mediaUrl('party', r.party) : null,
+          party_logo: r.has_party_logo
+            ? `${mediaUrl('party', r.party)}&v=${r.party_logo_v || 0}`
+            : null,
         }))
       );
     } catch {

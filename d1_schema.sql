@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS parties (
     short_code TEXT NOT NULL,
     logo_url TEXT,
     logo_key TEXT,
-    logo_mime TEXT
+    logo_mime TEXT,
+    logo_updated_at INTEGER
 );
 
 INSERT INTO parties (name, short_code, logo_url, logo_key, logo_mime)

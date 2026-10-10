@@ -1,7 +1,7 @@
 import { getSql } from './_db.js';
 import { isAdminRequest } from './_admin.js';
 import { splitDataUrl, partyLogoKey } from './_media.js';
-import { putObject } from './_b2.js';
+import { putObject, deleteObject } from './_b2.js';
 
 function send(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json');
@@ -17,7 +17,9 @@ function send(res, status, body) {
 const shape = (r) => ({
   name: r.name,
   short_code: r.short_code,
-  logo_url: r.logo_key ? `/api/media?party=${encodeURIComponent(r.name)}` : r.logo_url || null,
+  logo_url: r.logo_key
+    ? `/api/media?party=${encodeURIComponent(r.name)}&v=${r.logo_updated_at || 0}`
+    : r.logo_url || null,
 });
 
 export default async function handler(req, res) {
@@ -25,7 +27,7 @@ export default async function handler(req, res) {
     try {
       const sql = getSql();
       const rows = await sql.query(
-        'SELECT name, short_code, logo_url, logo_key FROM parties ORDER BY name'
+        'SELECT name, short_code, logo_url, logo_key, logo_updated_at FROM parties ORDER BY name'
       );
       res.setHeader('Cache-Control', 'public, s-maxage=600, stale-while-revalidate=600');
       return send(res, 200, rows.map(shape));
@@ -46,14 +48,21 @@ export default async function handler(req, res) {
       const media = splitDataUrl(logo_url);
       let logoKey = null;
       if (media) {
+        const prevRows = await sql.query('SELECT logo_key FROM parties WHERE name = ?', [name.trim()]);
+        const prevKey = prevRows[0]?.logo_key || null;
         logoKey = partyLogoKey(name.trim(), media.mime);
         await putObject(logoKey, media.bytes, media.mime);
+        // jpg -> png (or vice versa) leaves the old object orphaned in B2.
+        if (prevKey && prevKey !== logoKey) {
+          await deleteObject(prevKey).catch(() => {});
+        }
       }
+      const now = Date.now();
       const updated = await sql.query(
-        `UPDATE parties SET logo_url = ?, logo_key = ?, logo_mime = ?
+        `UPDATE parties SET logo_url = ?, logo_key = ?, logo_mime = ?, logo_updated_at = ?
          WHERE name = ?
-         RETURNING name, short_code, logo_url, logo_key`,
-        [media ? '' : logo_url || null, logoKey, media ? media.mime : null, name.trim()]
+         RETURNING name, short_code, logo_url, logo_key, logo_updated_at`,
+        [media ? '' : logo_url || null, logoKey, media ? media.mime : null, media ? now : null, name.trim()]
       );
       if (updated.length === 0) return send(res, 404, { error: 'Unknown political party.' });
       return send(res, 200, shape(updated[0]));
