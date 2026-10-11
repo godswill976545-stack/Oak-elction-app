@@ -28,13 +28,24 @@ const compressImage = (file, maxDim = 1600, quality = 0.82) =>
 // B2 native REST has no presigned URLs, so candidacy attachments are served
 // via an authenticated /api/media?candidacy=<id>&slot=<x> route. A plain
 // <a href> cannot attach the admin token header, so we fetch the blob with
-// the token and open it in a new tab.
+// the token and click a temporary <a download> — that saves the file instead
+// of letting Chrome's PDF/image viewer open it in a tab.
 const downloadAttachment = async (url, adminToken) => {
   const res = await fetch(url, { headers: { 'x-admin-token': adminToken } });
   if (!res.ok) throw new Error(`Download failed (${res.status}).`);
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
-  window.open(objectUrl, '_blank', 'noopener');
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  // The server names the file after the student's original upload; fall back
+  // to the slot + blob extension if that header is ever missing.
+  const header = /filename="?([^"]+)"?/i.exec(res.headers.get('content-disposition') || '');
+  const slot = new URL(url, window.location.origin).searchParams.get('slot') || 'attachment';
+  const ext = (blob.type.split('/')[1] || 'bin').split('+')[0];
+  a.download = header?.[1] || `${slot}.${ext}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 };
 

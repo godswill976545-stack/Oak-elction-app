@@ -1,6 +1,7 @@
 import { getSql } from './_db.js';
 import { getObject } from './_b2.js';
 import { isAdminRequest } from './_admin.js';
+import { extFor } from './_media.js';
 
 // Serves candidate photos and party logos as real image responses, proxied
 // from the private R2 bucket.
@@ -16,6 +17,21 @@ import { isAdminRequest } from './_admin.js';
 //   /api/media?party=<name>            (public: party logo)
 //   /api/media?candidacy=<id>&slot=x   (admin: sensitive attachment, token required)
 const SLOTS = { photo: 'photo_key', cv: 'cv_key', results: 'results_key', signature: 'signature_key' };
+// Original filenames live alongside the keys (except the photo, which is
+// re-encoded to JPEG in the browser before upload).
+const SLOT_FILES = { cv: 'cv_filename', results: 'results_filename', signature: 'signature_filename' };
+
+// A stored filename came off a student's machine, so strip anything that could
+// break out of the header or look like a path; fall back to <id>-<slot>.<ext>.
+function attachmentFilename(stored, id, slot, ext) {
+  const safe = String(stored || '')
+    .replace(/[^\w. -]+/g, '')
+    .trim()
+    .slice(0, 80)
+    .replace(/^\.+/, '');
+  if (safe) return safe;
+  return `${String(id).replace(/[^\w-]+/g, '')}-${slot}.${ext}`;
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -50,9 +66,13 @@ export default async function handler(req, res) {
         res.end('Unknown slot.');
         return;
       }
-      const rows = await sql.query(`SELECT ${col} AS k FROM candidacy_applications WHERE id = ?`, [
-        String(candidacy),
-      ]);
+      const fileCol = SLOT_FILES[slot];
+      const rows = await sql.query(
+        fileCol
+          ? `SELECT ${col} AS k, ${fileCol} AS f FROM candidacy_applications WHERE id = ?`
+          : `SELECT ${col} AS k FROM candidacy_applications WHERE id = ?`,
+        [String(candidacy)]
+      );
       const key = rows[0]?.k;
       if (!key) {
         res.statusCode = 404;
@@ -68,6 +88,10 @@ export default async function handler(req, res) {
       res.setHeader('Cache-Control', 'private, no-store');
       res.statusCode = 200;
       res.setHeader('Content-Type', obj.contentType || 'application/octet-stream');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${attachmentFilename(rows[0]?.f, candidacy, slot, extFor(obj.contentType))}"`
+      );
       res.setHeader('Content-Length', String(obj.body.length));
       res.end(req.method === 'HEAD' ? undefined : obj.body);
       return;
