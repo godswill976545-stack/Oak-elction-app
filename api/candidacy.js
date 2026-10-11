@@ -227,7 +227,7 @@ export default async function handler(req, res) {
         if (b.status === 'rejected') {
           const fullName = `${(app.given_names || '').trim()} ${(app.surname || '').trim()}`.trim();
           const rows = await sql.query(
-            `SELECT id FROM candidates WHERE name = ? AND category = ?
+            `SELECT id, photo_key FROM candidates WHERE name = ? AND category = ?
              AND COALESCE(primary_vote_count,0) = 0
              AND COALESCE(secondary_vote_count,0) = 0
              AND COALESCE(staff_vote_count,0) = 0 LIMIT 1`,
@@ -235,6 +235,17 @@ export default async function handler(req, res) {
           );
           if (rows.length > 0) {
             await sql.query('DELETE FROM candidates WHERE id = ?', [rows[0].id]);
+            // Approving re-keyed the photo into candidates/<id>/photo.* — a
+            // second copy the application's own candidacy/ cleanup below does
+            // not cover. Once the row is gone that object is orphaned, so
+            // remove it here (best-effort: the reject itself already landed).
+            if (rows[0].photo_key) {
+              try {
+                await deleteObject(rows[0].photo_key);
+              } catch (e) {
+                console.error(`candidacy ${app.id}: failed to delete candidate photo ${rows[0].photo_key}: ${e?.message}`);
+              }
+            }
           }
           // A rejected application is never shown again, so its uploads are
           // dead weight in B2. Delete them; the row keeps its *_key columns
