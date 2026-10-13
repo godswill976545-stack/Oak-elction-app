@@ -17,6 +17,7 @@ const POSITIONS = [
   "Root's Captain",
   "Trunk's Captain",
   "Acorn's Captain",
+  'Timekeeper',
 ];
 
 // Files go straight to B2 (see the upload-url action + _media.js), so the only

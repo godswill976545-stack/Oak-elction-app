@@ -30,6 +30,7 @@ const POSITIONS = [
   "Root's Captain",
   "Trunk's Captain",
   "Acorn's Captain",
+  'Timekeeper',
 ];
 
 const isBlank = (s) => typeof s !== 'string' || s.trim().length === 0;

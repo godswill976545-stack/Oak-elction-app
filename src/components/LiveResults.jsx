@@ -42,6 +42,7 @@ const POSITION_ICONS = {
   "Root's Captain": '🌱',
   "Trunk's Captain": '🌳',
   "Acorn's Captain": '🌰',
+  'Timekeeper': '⏱️',
 };
 
 const formatRelative = (ms) => {

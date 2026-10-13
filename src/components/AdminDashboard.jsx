@@ -253,6 +253,7 @@ const AdminDashboard = ({ adminToken }) => {
             <option value="Root's Captain">Root's Captain</option>
             <option value="Trunk's Captain">Trunk's Captain</option>
             <option value="Acorn's Captain">Acorn's Captain</option>
+            <option value="Timekeeper">Timekeeper</option>
           </select>
         </div>
 
