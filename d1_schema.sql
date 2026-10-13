@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS candidates (
     party TEXT REFERENCES parties (name),
     staff_vote_count INTEGER DEFAULT 0 NOT NULL,
     photo_key TEXT,
-    photo_mime TEXT
+    photo_mime TEXT,
+    application_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_candidates_category ON candidates (category);

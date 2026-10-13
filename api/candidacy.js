@@ -146,26 +146,23 @@ export default async function handler(req, res) {
         if (apps.length === 0) return send(res, 404, { error: 'Application not found.' });
         const app = apps[0];
 
-        // Rejection is terminal. Rejecting deletes the application's uploads
-        // from B2, so a later re-approval could never re-key the photo and
-        // would publish a candidate with none. Block the transition up front
-        // rather than discovering it once files are already gone.
-        if (app.status === 'rejected' && b.status !== 'rejected') {
-          return send(res, 409, {
-            error: 'This application was rejected and its files were deleted. It cannot be re-approved — ask the student to submit a new application.',
-          });
-        }
+        // Re-rejecting an already-rejected application is a clean no-op.
+        // Rejection is NOT terminal: the application's uploads are kept, so a
+        // later re-approval can re-key the photo and republish the candidate.
         if (app.status === 'rejected' && b.status === 'rejected') {
-          return send(res, 200, { id: app.id, status: 'rejected', candidateId: null });
+          const existingRej = await sql.query(
+            'SELECT id FROM candidates WHERE application_id = ? LIMIT 1',
+            [app.id]
+          );
+          return send(res, 200, { id: app.id, status: 'rejected', candidateId: existingRej[0]?.id || null });
         }
 
-        // Verify the photo BEFORE the status write. Rejecting deletes the
-        // application's uploads, and an orphaned row may never have had them,
-        // so approving a candidate with no photo would put a nameless face on
-        // the ballot. Checking first keeps the write and the publish in step:
-        // otherwise a refusal below leaves the row marked approved with no
-        // candidate published, which is exactly the half-state this guards
-        // against. Covers both a first approval and a re-approval.
+        // Verify the photo BEFORE the status write. An orphaned row may never
+        // have had one, so approving a candidate with no photo would put a
+        // nameless face on the ballot. Checking first keeps the write and the
+        // publish in step: otherwise a refusal below leaves the row marked
+        // approved with no candidate published, which is exactly the
+        // half-state this guards against. Covers first approval and re-approval.
         const src = b.status === 'approved' && app.photo_key
           ? await getObject(app.photo_key)
           : null;
@@ -190,9 +187,12 @@ export default async function handler(req, res) {
           const fullName = `${(app.given_names || '').trim()} ${(app.surname || '').trim()}`.trim();
           const manifesto = [app.motivation, app.achievements ? `Achievements: ${app.achievements}` : null]
             .filter(Boolean).join('\n\n');
+          // Keyed by application, never by name: two applicants who share a
+          // name and a post must each get their own ballot row, and a reject
+          // must only ever remove the candidate this application published.
           const existing = await sql.query(
-            'SELECT id, party FROM candidates WHERE name = ? AND category = ? LIMIT 1',
-            [fullName, app.intended_post]
+            'SELECT id, party FROM candidates WHERE application_id = ? LIMIT 1',
+            [app.id]
           );
           if (existing.length > 0) {
             candidateId = existing[0].id;
@@ -216,29 +216,31 @@ export default async function handler(req, res) {
             await sql.query(
               `INSERT INTO candidates
                  (id, name, category, manifesto, photo_url, photo_key, photo_mime, party,
-                  primary_vote_count, secondary_vote_count, staff_vote_count)
-               VALUES (?, ?, ?, ?, '', ?, ?, ?, 0, 0, 0)`,
-              [candidateId, fullName, app.intended_post, manifesto || '—', photoKey, photoMime, app.party || null]
+                  primary_vote_count, secondary_vote_count, staff_vote_count, application_id)
+               VALUES (?, ?, ?, ?, '', ?, ?, ?, 0, 0, 0, ?)`,
+              [candidateId, fullName, app.intended_post, manifesto || '—', photoKey, photoMime, app.party || null, app.id]
             );
           }
         }
         // Rejecting pulls the auto-published ballot row back off, but only
         // when it has zero votes everywhere — never delete votes cast.
+        // The application's own uploads are KEPT: rejection is not terminal,
+        // so a later re-approval must still be able to re-key the photo, and
+        // the files remain as the audit record of the application.
+        let candidateRemoved = false;
         if (b.status === 'rejected') {
-          const fullName = `${(app.given_names || '').trim()} ${(app.surname || '').trim()}`.trim();
           const rows = await sql.query(
-            `SELECT id, photo_key FROM candidates WHERE name = ? AND category = ?
+            `SELECT id, photo_key FROM candidates WHERE application_id = ?
              AND COALESCE(primary_vote_count,0) = 0
              AND COALESCE(secondary_vote_count,0) = 0
              AND COALESCE(staff_vote_count,0) = 0 LIMIT 1`,
-            [fullName, app.intended_post]
+            [app.id]
           );
           if (rows.length > 0) {
             await sql.query('DELETE FROM candidates WHERE id = ?', [rows[0].id]);
-            // Approving re-keyed the photo into candidates/<id>/photo.* — a
-            // second copy the application's own candidacy/ cleanup below does
-            // not cover. Once the row is gone that object is orphaned, so
-            // remove it here (best-effort: the reject itself already landed).
+            candidateRemoved = true;
+            // Approving re-keyed the photo into candidates/<id>/photo.* —
+            // once the row is gone that object is orphaned, so remove it.
             if (rows[0].photo_key) {
               try {
                 await deleteObject(rows[0].photo_key);
@@ -247,27 +249,16 @@ export default async function handler(req, res) {
               }
             }
           }
-          // A rejected application is never shown again, so its uploads are
-          // dead weight in B2. Delete them; the row keeps its *_key columns
-          // so the decision stays auditable, they just no longer resolve.
-          for (const slot of SLOTS) {
-            const key = app[`${slot}_key`];
-            if (!key) continue;
-            try {
-              const gone = await deleteObject(key);
-              // `false` just means it was already gone (never uploaded, or
-              // cleaned up on an earlier attempt) — not worth an alert.
-              if (!gone) console.warn(`candidacy ${app.id}: ${slot} upload already gone (${key})`);
-            } catch (e) {
-              // Deletion is best-effort cleanup; the reject itself succeeded,
-              // so log rather than fail the request. The guard above makes
-              // this safe: a rejected application can never be re-approved,
-              // so a lingering file is wasted storage, not a correctness bug.
-              console.error(`candidacy ${app.id}: failed to delete ${slot} upload ${key}: ${e?.message}`);
-            }
-          }
         }
-        return send(res, 200, { ...updated[0], candidateId });
+        const kept = candidateRemoved
+          ? null
+          : (await sql.query('SELECT id FROM candidates WHERE application_id = ? LIMIT 1', [app.id]))[0]?.id || null;
+        return send(res, 200, {
+          ...updated[0],
+          candidateId: kept,
+          candidateRemoved,
+          ...(kept ? { message: 'This candidate has votes and stays on the ballot.' } : {}),
+        });
       }
 
       // New submission from the digital candidacy form. Attachments are NOT
