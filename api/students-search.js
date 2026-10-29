@@ -45,9 +45,12 @@ export default async function handler(req, res) {
 
     const out = await sql.batch([
       // 1. Backfill has_voted for completed students matching this search.
+      //    DEMO-% voters are excluded — they vote unlimited times, so they
+      //    must never be flagged complete.
       {
         sql: `UPDATE primary_students SET has_voted = 1
               WHERE has_voted = 0
+                AND id NOT LIKE 'DEMO-%'
                 AND LOWER(name) LIKE LOWER(?) ESCAPE '\\'
                 AND ${completeSql.replaceAll('s.id', 'primary_students.id')}`,
         // One placeholder (the name LIKE); the subquery inlines s.id via
@@ -72,16 +75,21 @@ export default async function handler(req, res) {
     ]);
 
     const rows = out[1]?.results ?? [];
-    const results = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      class: r.class,
-      // has_voted was just resynced in statement 1, so it already includes
-      // this page's completions; OR in complete as belt-and-braces.
-      has_voted: r.has_voted === 1 || r.complete === 1,
-      complete: r.complete === 1,
-      votedCategories: JSON.parse(r.voted_json || '[]'),
-    }));
+    const results = rows.map((r) => {
+      // Demo voters are always a fresh ballot: no has_voted, no resumed
+      // categories, so each handover starts from position 0.
+      const isDemo = r.id.startsWith('DEMO-');
+      return {
+        id: r.id,
+        name: r.name,
+        class: r.class,
+        // has_voted was just resynced in statement 1, so it already includes
+        // this page's completions; OR in complete as belt-and-braces.
+        has_voted: isDemo ? false : r.has_voted === 1 || r.complete === 1,
+        complete: isDemo ? false : r.complete === 1,
+        votedCategories: isDemo ? [] : JSON.parse(r.voted_json || '[]'),
+      };
+    });
     res.setHeader('Cache-Control', 'no-store');
     res.statusCode = 200;
     res.end(JSON.stringify(results));

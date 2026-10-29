@@ -93,14 +93,20 @@ CREATE TABLE IF NOT EXISTS votes (
 );
 CREATE INDEX IF NOT EXISTS idx_votes_student ON votes (student_id);
 
--- Primary portal ballots (students vote by name search; one per position).
+-- Primary portal ballots (students vote by name search). One row per
+-- (student, category) for real voters, enforced by a PARTIAL unique index
+-- that exempts DEMO-% students: they are demo voters allowed to vote an
+-- unlimited number of times. primary_students.has_voted flips once ALL
+-- positions are covered for real voters (see /api/students-search and
+-- /api/vote-primary); demo voters never flip.
 CREATE TABLE IF NOT EXISTS primary_votes (
     student_id TEXT NOT NULL REFERENCES primary_students (id) ON DELETE CASCADE,
     candidate_id TEXT NOT NULL REFERENCES candidates (id) ON DELETE CASCADE,
     category TEXT NOT NULL,
-    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,
-    PRIMARY KEY (student_id, category)
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_primary_votes_one_per_voter
+    ON primary_votes (student_id, category) WHERE student_id NOT LIKE 'DEMO-%';
 CREATE INDEX IF NOT EXISTS idx_primary_votes_student ON primary_votes (student_id);
 
 -- Staff portal ballots (one per position per staff code).
