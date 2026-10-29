@@ -1,9 +1,11 @@
 import { getSql } from './_db.js';
 
 // Secondary portal: one vote per (student, category), enforced by the
-// PRIMARY KEY on votes. secondary_students.has_voted flips only once
-// every position is covered, so voters can finish remaining categories across
-// sessions.
+// partial unique index on votes (see d1_schema.sql). DEMO-% students are
+// demo voters with UNLIMITED voting — the index exempts them and has_voted
+// never flips. secondary_students.has_voted flips only once every position
+// is covered for real voters, so they can finish remaining categories
+// across sessions.
 //
 // One D1 batch = one transaction (see vote-primary.js for the changes()
 // chaining trick that replaces Postgres data-modifying CTEs).
@@ -38,7 +40,7 @@ export default async function handler(req, res) {
               FROM candidates c
               WHERE c.id = ?
                 AND EXISTS (SELECT 1 FROM secondary_students WHERE id = ?)
-              ON CONFLICT (student_id, category) DO NOTHING`,
+              ON CONFLICT (student_id, category) WHERE student_id NOT LIKE 'DEMO-%' DO NOTHING`,
         params: [sid, candidateId, sid],
       },
       {
@@ -49,6 +51,7 @@ export default async function handler(req, res) {
       {
         sql: `UPDATE secondary_students SET has_voted = 1
               WHERE id = ?
+                AND id NOT LIKE 'DEMO-%'
                 AND (SELECT changes()) > 0
                 AND (SELECT COUNT(*) FROM candidates) > 0
                 AND NOT EXISTS (

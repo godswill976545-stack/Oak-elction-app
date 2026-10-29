@@ -2,6 +2,8 @@ import { getSql } from './_db.js';
 
 // Staff portal voting: one vote per (staff code, category), tallied in the
 // separate staff_vote_count column so staff and student counts never mix.
+// STF/90% codes are demo staff with UNLIMITED voting — the partial unique
+// index (see d1_schema.sql) exempts them and has_voted never flips.
 //
 // One D1 batch = one transaction (see vote-primary.js for the changes()
 // chaining trick that replaces Postgres data-modifying CTEs).
@@ -36,7 +38,7 @@ export default async function handler(req, res) {
               FROM candidates c
               WHERE c.id = ?
                 AND EXISTS (SELECT 1 FROM staff WHERE code = ?)
-              ON CONFLICT (staff_code, category) DO NOTHING`,
+              ON CONFLICT (staff_code, category) WHERE staff_code NOT LIKE 'STF/90%' DO NOTHING`,
         params: [code, candidateId, code],
       },
       {
@@ -47,6 +49,7 @@ export default async function handler(req, res) {
       {
         sql: `UPDATE staff SET has_voted = 1
               WHERE code = ?
+                AND code NOT LIKE 'STF/90%'
                 AND (SELECT changes()) > 0
                 AND (SELECT COUNT(*) FROM candidates) > 0
                 AND NOT EXISTS (

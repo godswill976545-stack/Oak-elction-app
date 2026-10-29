@@ -38,10 +38,11 @@ export default async function handler(req, res) {
 
     const out = await sql.batch([
       // 1. Resync the cached flag (set when done, clear when a new position
-      //    appeared after the student finished).
+      //    appeared after the student finished). DEMO-% voters are exempt —
+      //    they vote unlimited times, so the flag stays 0 forever.
       {
         sql: `UPDATE secondary_students SET has_voted = CASE WHEN ${doneSql} THEN 1 ELSE 0 END
-              WHERE id = ? AND has_voted IS NOT (CASE WHEN ${doneSql} THEN 1 ELSE 0 END)`,
+              WHERE id = ? AND id NOT LIKE 'DEMO-%' AND has_voted IS NOT (CASE WHEN ${doneSql} THEN 1 ELSE 0 END)`,
         params: [sid, sid, sid],
       },
       // 2. Read the post-sync state.
@@ -63,7 +64,10 @@ export default async function handler(req, res) {
       res.end(JSON.stringify({ error: 'Invalid Student ID. Please check and try again.' }));
       return;
     }
-    if (row.done) {
+    // Demo voters are always a fresh ballot: ignore any accumulated done
+    // state and hand over zero categories so every visit starts at 0/13.
+    const isDemo = row.id.startsWith('DEMO-');
+    if (row.done && !isDemo) {
       res.statusCode = 409;
       res.end(JSON.stringify({ error: 'You have already voted!' }));
       return;
@@ -75,7 +79,7 @@ export default async function handler(req, res) {
         studentId: row.id,
         name: row.name,
         verified: true,
-        votedCategories: JSON.parse(row.voted_json || '[]'),
+        votedCategories: isDemo ? [] : JSON.parse(row.voted_json || '[]'),
       })
     );
   } catch {

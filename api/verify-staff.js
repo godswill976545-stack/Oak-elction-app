@@ -29,9 +29,11 @@ export default async function handler(req, res) {
       )`;
 
     const out = await sql.batch([
+      // 1. Resync the cached flag. Demo staff (STF/90%) are exempt — they
+      //    vote unlimited times, so the flag stays 0 forever.
       {
         sql: `UPDATE staff SET has_voted = CASE WHEN ${doneSql} THEN 1 ELSE 0 END
-              WHERE code = ? AND has_voted IS NOT (CASE WHEN ${doneSql} THEN 1 ELSE 0 END)`,
+              WHERE code = ? AND code NOT LIKE 'STF/90%' AND has_voted IS NOT (CASE WHEN ${doneSql} THEN 1 ELSE 0 END)`,
         params: [code, code, code],
       },
       {
@@ -52,7 +54,10 @@ export default async function handler(req, res) {
       res.end(JSON.stringify({ error: 'Invalid staff code. Please check and try again.' }));
       return;
     }
-    if (row.done) {
+    // Demo staff are always a fresh ballot: ignore accumulated done state
+    // and hand over zero categories so every visit starts at 0/13.
+    const isDemo = row.code.startsWith('STF/90');
+    if (row.done && !isDemo) {
       res.statusCode = 409;
       res.end(JSON.stringify({ error: 'This staff code has already voted!' }));
       return;
@@ -64,7 +69,7 @@ export default async function handler(req, res) {
         staffCode: row.code,
         name: row.name,
         verified: true,
-        votedCategories: JSON.parse(row.voted_json || '[]'),
+        votedCategories: isDemo ? [] : JSON.parse(row.voted_json || '[]'),
       })
     );
   } catch {

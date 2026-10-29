@@ -80,17 +80,20 @@ CREATE TABLE IF NOT EXISTS staff (
     has_voted INTEGER DEFAULT 0 NOT NULL
 );
 
--- Per-category ballots (secondary portal). One row per (student, category):
--- lets a student vote in every position while blocking a second vote in the
--- same position. secondary_students.has_voted flips once ALL positions are
--- covered (see /api/vote-secondary).
+-- Per-category ballots (secondary portal). One row per (student, category)
+-- for real voters, enforced by a PARTIAL unique index that exempts DEMO-%
+-- students: they are demo voters allowed to vote an unlimited number of
+-- times. secondary_students.has_voted flips once ALL positions are covered
+-- for real voters (see /api/verify-student and /api/vote-secondary); demo
+-- voters never flip.
 CREATE TABLE IF NOT EXISTS votes (
     student_id TEXT NOT NULL REFERENCES secondary_students (id) ON DELETE CASCADE,
     candidate_id TEXT NOT NULL REFERENCES candidates (id) ON DELETE CASCADE,
     category TEXT NOT NULL,
-    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,
-    PRIMARY KEY (student_id, category)
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_one_per_voter
+    ON votes (student_id, category) WHERE student_id NOT LIKE 'DEMO-%';
 CREATE INDEX IF NOT EXISTS idx_votes_student ON votes (student_id);
 
 -- Primary portal ballots (students vote by name search). One row per
@@ -109,14 +112,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_primary_votes_one_per_voter
     ON primary_votes (student_id, category) WHERE student_id NOT LIKE 'DEMO-%';
 CREATE INDEX IF NOT EXISTS idx_primary_votes_student ON primary_votes (student_id);
 
--- Staff portal ballots (one per position per staff code).
+-- Staff portal ballots. One row per (staff code, position) for real staff,
+-- enforced by a PARTIAL unique index that exempts STF/90% codes: they are
+-- demo staff allowed to vote an unlimited number of times.
 CREATE TABLE IF NOT EXISTS staff_votes (
     staff_code TEXT NOT NULL REFERENCES staff (code) ON DELETE CASCADE,
     candidate_id TEXT NOT NULL REFERENCES candidates (id) ON DELETE CASCADE,
     category TEXT NOT NULL,
-    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,
-    PRIMARY KEY (staff_code, category)
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_votes_one_per_code
+    ON staff_votes (staff_code, category) WHERE staff_code NOT LIKE 'STF/90%';
 CREATE INDEX IF NOT EXISTS idx_staff_votes_staff ON staff_votes (staff_code);
 
 -- Prefect Council candidacy applications (digital candidacy form).
